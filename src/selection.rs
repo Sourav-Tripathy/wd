@@ -1,7 +1,6 @@
 //! X11 PRIMARY selection watcher via x11rb.
 //! Emits word events when selection changes in a PDF viewer.
 
-use std::sync::mpsc;
 
 /// Known PDF viewer window class names.
 pub const PDF_VIEWER_CLASSES: &[&str] = &[
@@ -24,13 +23,13 @@ pub struct SelectionEvent {
 /// Uses XFixes to monitor selection changes, checks if the source window
 /// belongs to a known PDF viewer, and sends selected text through a channel.
 pub struct SelectionWatcher {
-    sender: mpsc::Sender<SelectionEvent>,
+    sender: tokio::sync::mpsc::UnboundedSender<SelectionEvent>,
     pdf_auto_trigger: bool,
 }
 
 impl SelectionWatcher {
     /// Create a new selection watcher.
-    pub fn new(sender: mpsc::Sender<SelectionEvent>, pdf_auto_trigger: bool) -> Self {
+    pub fn new(sender: tokio::sync::mpsc::UnboundedSender<SelectionEvent>, pdf_auto_trigger: bool) -> Self {
         SelectionWatcher {
             sender,
             pdf_auto_trigger,
@@ -56,8 +55,16 @@ impl SelectionWatcher {
         let screen = &conn.setup().roots[screen_num];
         let root = screen.root;
 
-        // Query XFixes extension
-        conn.xfixes_query_version(5, 0)?;
+        // Query XFixes extension and get its event base
+        let xfixes_info = conn.xfixes_query_version(5, 0)?.reply()?;
+        let _ = xfixes_info; // version confirmed
+
+        // Get extension info for event-base arithmetic
+        let ext_info = conn
+            .query_extension(b"XFIXES")?
+            .reply()?;
+        // XFixes SelectionNotify is event_base + 0
+        let xfixes_selection_notify_type = ext_info.first_event;
 
         // Get PRIMARY atom
         let primary_atom = xproto::AtomEnum::PRIMARY;
@@ -107,21 +114,25 @@ impl SelectionWatcher {
 
             // Check for XFixes SelectionNotify events
             let event_type = event.response_type() & 0x7f;
+            log::debug!("X11 event received: type={}", event_type);
 
-            // XFixes selection notify event type
-            if event_type == xfixes::SelectionNotifyEvent::OPCODE {
+            // XFixes selection notify event type (first_event + 0)
+            if event_type == xfixes_selection_notify_type {
+                log::debug!("XFixes SelectionNotify received");
                 // Read the selection owner window
                 let selection_owner = conn
                     .get_selection_owner(primary_atom.into())?
                     .reply()?
                     .owner;
 
+                log::debug!("Selection owner window: {}", selection_owner);
                 if selection_owner == 0 {
                     continue;
                 }
 
                 // Check if the owner window belongs to a PDF viewer
                 if !self.is_pdf_viewer_window(&conn, selection_owner) {
+                    log::debug!("Selection owner is not a PDF viewer, skipping");
                     continue;
                 }
 
@@ -156,47 +167,103 @@ impl SelectionWatcher {
                         // Only trigger for single words or short phrases
                         log::debug!("PDF selection detected: {:?}", text);
                         let _ = self.sender.send(SelectionEvent { text });
+                    } else if !text.is_empty() {
+                        log::debug!("Selection too long ({}), ignoring: {:?}", text.split_whitespace().count(), &text[..text.len().min(50)]);
                     }
                 }
             }
         }
     }
 
-    /// Check if a window belongs to a known PDF viewer by examining WM_CLASS.
+    /// Check if a window belongs to a known PDF viewer by examining WM_CLASS,
+    /// traversing up the window tree since the selection owner might be a child window.
     fn is_pdf_viewer_window(
         &self,
         conn: &impl x11rb::protocol::xproto::ConnectionExt,
         window: u32,
     ) -> bool {
-        let wm_class_atom = match conn
-            .intern_atom(false, b"WM_CLASS")
-            .and_then(|cookie| cookie.reply())
-        {
-            Ok(reply) => reply.atom,
+        let wm_class_atom = match conn.intern_atom(false, b"WM_CLASS") {
+            Ok(cookie) => match cookie.reply() {
+                Ok(reply) => reply.atom,
+                Err(_) => return false,
+            },
             Err(_) => return false,
         };
 
-        let prop = match conn
-            .get_property(
+        let mut current_window = window;
+        
+        // Traverse up the window tree
+        for depth in 0..10 {
+            if current_window == 0 {
+                break;
+            }
+            
+            let prop = match conn.get_property(
                 false,
-                window,
+                current_window,
                 wm_class_atom,
-                x11rb::protocol::xproto::AtomEnum::STRING.into(),
+                x11rb::protocol::xproto::AtomEnum::ANY,
                 0,
                 1024,
-            )
-            .and_then(|cookie| cookie.reply())
-        {
-            Ok(prop) => prop,
-            Err(_) => return false,
-        };
+            ) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(prop) => prop,
+                    Err(e) => {
+                        log::debug!("get_property reply error at depth {}: {:?}", depth, e);
+                        return false;
+                    }
+                },
+                Err(e) => {
+                    log::debug!("get_property error at depth {}: {:?}", depth, e);
+                    return false;
+                }
+            };
 
-        if let Ok(class_str) = String::from_utf8(prop.value) {
-            for class_name in PDF_VIEWER_CLASSES {
-                if class_str.contains(class_name) {
-                    return true;
+            if prop.value.is_empty() {
+                // Try parent window
+                match conn.query_tree(current_window) {
+                    Ok(cookie) => match cookie.reply() {
+                        Ok(tree) => {
+                            if tree.parent == current_window || tree.parent == 0 || tree.parent == tree.root {
+                                log::debug!("Reached root/null at depth {}. Treating as Wayland proxy window.", depth);
+                                return false; // Reverted: Global popup User can make this true if they want
+                            }
+                            log::debug!("WM_CLASS empty on win {}, trying parent: {}", current_window, tree.parent);
+                            current_window = tree.parent;
+                            continue;
+                        }
+                        Err(e) => {
+                            log::debug!("query_tree reply error: {:?}", e);
+                            break;
+                        }
+                    },
+                    Err(e) => {
+                        log::debug!("query_tree error: {:?}", e);
+                        break;
+                    }
                 }
             }
+
+            // WM_CLASS is two null-terminated strings: instance\0class\0
+            // We must split on null bytes, not treat as a single UTF-8 string
+            let segments: Vec<&[u8]> = prop.value.split(|&b| b == 0).collect();
+            for seg in &segments {
+                if seg.is_empty() {
+                    continue;
+                }
+                let seg_str = String::from_utf8_lossy(seg).to_lowercase();
+                log::debug!("WM_CLASS segment found on win {}: {:?}", current_window, seg_str);
+                for class_name in PDF_VIEWER_CLASSES {
+                    if seg_str.contains(&class_name.to_lowercase()) {
+                        log::debug!("PDF viewer detected: {:?}", seg_str);
+                        return true;
+                    }
+                }
+            }
+            
+            // If we found a WM_CLASS but it didn't match, we stop traversing.
+            log::debug!("WM_CLASS found but no match. Not a PDF viewer.");
+            return false;
         }
 
         false

@@ -113,12 +113,27 @@ annotate_include_example = true
 3. If not found, silently query Wiktionary REST API
 4. Source label (`[WordNet]` or `[Wiktionary]`) shown in output
 
-## Constraints
+## Current Limitations & Known Issues
 
-- X11 only in v1 (runs under XWayland on Wayland compositors)
-- PDF selection works with Evince and Okular only
-- Linux only
-- Configuration via `config.toml` only (no GUI settings)
+`wd` currently relies heavily on X11 APIs (via `x11rb`) for global hotkeys, window identification, and popup placement. Because of this, using it under **Wayland** introduces several quirks:
+
+1. **Wayland Auto-Trigger Issue**: If you run Evince or Okular natively under Wayland, the `wd` daemon cannot detect that the text selection came from a PDF viewer (Wayland hides the application identity behind an "Xwayland proxy window", stripping the application class).
+   - **Workaround:** For the auto-trigger to recognize your PDF viewer, run it using XWayland (e.g., `GDK_BACKEND=x11 evince`). 
+   - **Alternative:** You can always just highlight text and use the manual `Ctrl+Alt+W` hotkey (this bypasses the application check).
+2. **Wayland Global Hotkeys**: On strict Wayland compositors (like GNOME), global hotkeys (`Ctrl+Alt+W`) will only fire if an X11/XWayland window is currently in focus. Less restrictive compositors (like KDE Plasma) usually allow global X11 shortcuts out-of-the-box.
+3. **Cursor Snapping**: GTK4 natively hands over all window positioning to the Wayland compositor. To force the definition popup to render near your cursor, we use a manual X11 coordinate override. **For this to work cleanly, the daemon must be run with `GDK_BACKEND=x11`.**
+4. **Linux Only**: Heavily coupled to D-Bus, X11, and Linux filesystem structures.
+
+## Contributing
+
+Contributions are incredibly welcome! I am specifically looking for help migrating `wd` to natively support the modern Wayland desktop ecosystem.
+
+**Open Issues you can help solve:**
+- **Native Wayland Selection Watcher:** Implement a Wayland-native text selection monitor (e.g., using the `wlr-data-control` protocol) to replace the current `XFixes` dependency. 
+- **Wayland Global Hotkeys:** Support Wayland global shortcuts (e.g., using `ext-session-lock-v1` or compositor-specific DBus APIs) instead of X11-specific global keyboard grabs.
+- **GTK4 Notification Placement:** Find a clean, native approach to placing GTK4 popup windows precisely at the cursor coordinates within a strict Wayland environment.
+
+If you enjoy system-level Rust programming, feel free to dive in and open a PR!
 
 ## License
 

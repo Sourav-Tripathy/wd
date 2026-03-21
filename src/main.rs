@@ -23,7 +23,7 @@ use config::Config;
     about = "Look up the meaning of a word",
     long_about = "wd is a lightweight word-lookup daemon and CLI tool for Linux.\n\n\
                    CLI mode:    wd <word>\n\
-                   Daemon mode: wd --daemon"
+                   Daemon mode: wd daemon   (or: wd --daemon)"
 )]
 struct Args {
     /// Run as a background daemon (watches PDF selections, responds to hotkeys).
@@ -44,7 +44,10 @@ fn main() {
     let args = Args::parse();
     let config = Config::load();
 
-    if args.daemon {
+    // Support both `wd --daemon` and `wd daemon` (intuitive subcommand style)
+    let start_daemon = args.daemon || args.word.as_deref() == Some("daemon");
+
+    if start_daemon {
         // Daemon mode
         daemon::run(&config);
     } else if let Some(word) = args.word {

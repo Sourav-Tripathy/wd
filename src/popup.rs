@@ -26,7 +26,7 @@ pub fn show(
 
     // Apply CSS styling
     let css = CssProvider::new();
-    css.load_from_string(&format!(
+    css.load_from_data(&format!(
         r#"
         window {{
             background-color: #1e1e2e;
@@ -179,4 +179,64 @@ pub fn show(
     }
 
     window.present();
+
+    // In GTK4, explicit window positioning is removed from the API because 
+    // Wayland delegates it entirely to the compositor. However, since we run 
+    // under X11 (XWayland), we can use x11rb to manually find our window and 
+    // move it directly to the mouse cursor!
+    glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+        std::thread::spawn(move || {
+            // Give GTK a moment to map the window to the X server
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            move_window_to_cursor_x11();
+        });
+    });
+}
+
+/// Uses x11rb to query the pointer, find the `wd` popup window, and move it.
+fn move_window_to_cursor_x11() {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, ConfigureWindowAux};
+
+    if let Ok((conn, screen_num)) = x11rb::connect(None) {
+        let root = conn.setup().roots[screen_num].root;
+
+        // Get cursor position
+        if let Ok(c) = conn.query_pointer(root) {
+            if let Ok(ptr) = c.reply() {
+                let cx = ptr.root_x as i32;
+                let cy = ptr.root_y as i32;
+
+                let wm_name = conn.intern_atom(false, b"WM_NAME").unwrap().reply().unwrap().atom;
+
+                // Simple BFS to find the window with title "wd"
+                let mut queue = vec![root];
+                let mut target_window = None;
+
+                while let Some(w) = queue.pop() {
+                    if let Ok(c_prop) = conn.get_property(false, w, wm_name, AtomEnum::ANY, 0, 1024) {
+                        if let Ok(prop) = c_prop.reply() {
+                            let val = String::from_utf8_lossy(&prop.value);
+                            if val == "wd" {
+                                target_window = Some(w);
+                                break;
+                            }
+                        }
+                    }
+                    if let Ok(c_tree) = conn.query_tree(w) {
+                        if let Ok(tree) = c_tree.reply() {
+                            // Extend with children
+                            queue.extend(tree.children);
+                        }
+                    }
+                }
+
+                if let Some(w) = target_window {
+                    // Found our window! Move it slightly below and right of the cursor
+                    let _ = conn.configure_window(w, &ConfigureWindowAux::new().x(cx + 10).y(cy + 10));
+                    let _ = conn.flush();
+                }
+            }
+        }
+    }
 }

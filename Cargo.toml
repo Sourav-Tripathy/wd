@@ -17,7 +17,7 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 
 # X11 integration for selection watching and global hotkeys
-x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+x11rb = { version = "0.13", features = ["allow-unsafe-code", "xfixes"] }
 
 # DBus client for PDF viewer annotation (Evince/Okular)
 zbus = { version = "4", default-features = false, features = ["tokio"] }
@@ -50,6 +50,9 @@ env_logger = "0.11"
 
 # XDG directories
 dirs = "5"
+
+# libc for POSIX signal constants (SIGINT, SIGTERM)
+libc = "0.2"
 
 [package.metadata.deb]
 name = "wd"

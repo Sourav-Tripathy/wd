@@ -7,8 +7,9 @@ use crate::popup;
 use crate::selection::{self, SelectionEvent, SelectionWatcher};
 use crate::wordnet::WordNetIndex;
 
+use gtk4::glib;
 use gtk4::prelude::*;
-use std::sync::mpsc;
+use libc;
 use std::sync::Arc;
 
 /// Run the wd daemon.
@@ -36,9 +37,9 @@ pub fn run(config: &Config) {
         }
     };
 
-    // Create event channels
-    let (selection_tx, selection_rx) = mpsc::channel::<SelectionEvent>();
-    let (hotkey_tx, hotkey_rx) = mpsc::channel::<HotkeyEvent>();
+    // Create async event channels that wake up the GTK main loop (fixes 100% CPU bug)
+    let (selection_tx, mut selection_rx) = tokio::sync::mpsc::unbounded_channel::<SelectionEvent>();
+    let (hotkey_tx, mut hotkey_rx) = tokio::sync::mpsc::unbounded_channel::<HotkeyEvent>();
 
     // Start X11 selection watcher in its own thread
     let sel_config = config.pdf_auto_trigger;
@@ -65,58 +66,57 @@ pub fn run(config: &Config) {
     let app = gtk4::Application::builder()
         .application_id("com.wd.daemon")
         .build();
-
-    let wordnet_for_app = wordnet.clone();
-    let config_for_app = config.clone();
-
     app.connect_activate(move |app| {
         log::info!("GTK4 application activated, entering event loop");
-
-        let wordnet = wordnet_for_app.clone();
-        let config = config_for_app.clone();
-        let app_clone = app.clone();
-
-        // Process events from selection watcher and hotkey listener
-        // Use a GTK idle handler to poll the channels
-        gtk4::glib::idle_add_local(move || {
-            // Check for selection events (non-blocking)
-            if let Ok(event) = selection_rx.try_recv() {
-                handle_lookup(&app_clone, &event.text, &wordnet, &config);
-            }
-
-            // Check for hotkey events (non-blocking)
-            if let Ok(event) = hotkey_rx.try_recv() {
-                match event {
-                    HotkeyEvent::Lookup => {
-                        // Read current PRIMARY selection
-                        match selection::read_primary_selection() {
-                            Ok(text) if !text.is_empty() => {
-                                handle_lookup(&app_clone, &text, &wordnet, &config);
-                            }
-                            Ok(_) => {
-                                log::debug!("Empty selection, ignoring lookup hotkey");
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to read PRIMARY selection: {}", e);
-                            }
-                        }
-                    }
-                    HotkeyEvent::Annotate => {
-                        log::debug!("Annotate hotkey pressed (annotation handled in popup)");
-                        // Annotation is handled by the popup's key handler
-                    }
-                }
-            }
-
-            gtk4::glib::ControlFlow::Continue
-        });
+        std::mem::forget(app.hold());
     });
 
-    // Handle signals for clean shutdown
-    let app_for_signal = app.clone();
-    ctrlc_handler(move || {
-        log::info!("Received shutdown signal, cleaning up...");
-        app_for_signal.quit();
+    // Process events from selection watcher
+    let app_clone = app.clone();
+    let wordnet_sel = wordnet.clone();
+    let config_sel = config.clone();
+    glib::MainContext::default().spawn_local(async move {
+        while let Some(event) = selection_rx.recv().await {
+            handle_lookup(&app_clone, &event.text, &wordnet_sel, &config_sel);
+        }
+    });
+
+    // Process events from hotkey listener
+    let app_clone = app.clone();
+    let wordnet_hk = wordnet.clone();
+    let config_hk = config.clone();
+    glib::MainContext::default().spawn_local(async move {
+        while let Some(event) = hotkey_rx.recv().await {
+            match event {
+                HotkeyEvent::Lookup => {
+                    // Read current PRIMARY selection
+                    match selection::read_primary_selection() {
+                        Ok(text) if !text.is_empty() => {
+                            handle_lookup(&app_clone, &text, &wordnet_hk, &config_hk);
+                        }
+                        Ok(_) => log::debug!("Empty selection, ignoring lookup hotkey"),
+                        Err(e) => log::warn!("Failed to read PRIMARY selection: {}", e),
+                    }
+                }
+                HotkeyEvent::Annotate => {
+                    log::debug!("Annotate hotkey pressed (annotation handled in popup)");
+                }
+            }
+        }
+    });
+
+    // Handle SIGINT/SIGTERM for clean shutdown using GTK's main-thread signal handler
+    let app_for_sigint = app.clone();
+    glib::unix_signal_add_local(libc::SIGINT, move || {
+        log::info!("Received SIGINT, shutting down...");
+        app_for_sigint.quit();
+        glib::ControlFlow::Break
+    });
+    let app_for_sigterm = app.clone();
+    glib::unix_signal_add_local(libc::SIGTERM, move || {
+        log::info!("Received SIGTERM, shutting down...");
+        app_for_sigterm.quit();
+        glib::ControlFlow::Break
     });
 
     app.run_with_args::<String>(&[]);
@@ -150,39 +150,4 @@ fn handle_lookup(
     }
 }
 
-/// Set up a Ctrl+C / SIGTERM handler.
-fn ctrlc_handler<F: Fn() + Send + 'static>(handler: F) {
-    // Simple signal handler using std
-    std::thread::spawn(move || {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
-        // Register signal handlers
-        unsafe {
-            libc_signal(libc_SIGTERM, || {
-                SHUTDOWN.store(true, Ordering::SeqCst);
-            });
-            libc_signal(libc_SIGINT, || {
-                SHUTDOWN.store(true, Ordering::SeqCst);
-            });
-        }
-
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            if SHUTDOWN.load(Ordering::SeqCst) {
-                handler();
-                break;
-            }
-        }
-    });
-}
-
-// Minimal libc signal constants and function wrapper
-const libc_SIGTERM: i32 = 15;
-const libc_SIGINT: i32 = 2;
-
-unsafe fn libc_signal<F: Fn()>(_sig: i32, _handler: F) {
-    // In a real implementation, we'd use libc::signal or nix crate.
-    // For now, we rely on GTK4's built-in signal handling.
-    // The ctrlc_handler above is a simplified version.
-}

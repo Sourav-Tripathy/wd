@@ -1,7 +1,6 @@
 //! Registers global hotkeys via XGrabKey (x11rb).
 //! Emits trigger events to the daemon loop.
 
-use std::sync::mpsc;
 
 /// Event emitted when a global hotkey is pressed.
 #[derive(Debug, Clone)]
@@ -31,10 +30,10 @@ fn parse_hotkey_string(hotkey: &str) -> Result<ParsedHotkey, String> {
 
     for part in &parts[..parts.len() - 1] {
         match part.to_lowercase().as_str() {
-            "ctrl" | "control" => modifiers |= xproto::ModMask::CONTROL.into(),
-            "alt" | "mod1" => modifiers |= xproto::ModMask::M1.into(),
-            "shift" => modifiers |= xproto::ModMask::SHIFT.into(),
-            "super" | "mod4" => modifiers |= xproto::ModMask::M4.into(),
+            "ctrl" | "control" => modifiers |= u16::from(xproto::ModMask::CONTROL),
+            "alt" | "mod1"    => modifiers |= u16::from(xproto::ModMask::M1),
+            "shift"           => modifiers |= u16::from(xproto::ModMask::SHIFT),
+            "super" | "mod4" => modifiers |= u16::from(xproto::ModMask::M4),
             other => return Err(format!("Unknown modifier: {}", other)),
         }
     }
@@ -96,7 +95,7 @@ fn key_name_to_keysym(key: &str) -> Result<u32, String> {
 
 /// Global hotkey registrar and listener.
 pub struct HotkeyListener {
-    sender: mpsc::Sender<HotkeyEvent>,
+    sender: tokio::sync::mpsc::UnboundedSender<HotkeyEvent>,
     lookup_hotkey: String,
     annotate_hotkey: String,
 }
@@ -104,7 +103,7 @@ pub struct HotkeyListener {
 impl HotkeyListener {
     /// Create a new hotkey listener.
     pub fn new(
-        sender: mpsc::Sender<HotkeyEvent>,
+        sender: tokio::sync::mpsc::UnboundedSender<HotkeyEvent>,
         lookup_hotkey: String,
         annotate_hotkey: String,
     ) -> Self {
@@ -202,25 +201,20 @@ impl HotkeyListener {
         // Event loop
         loop {
             let event = conn.wait_for_event()?;
-            let event_type = event.response_type() & 0x7f;
 
-            if event_type == xproto::KEY_PRESS_EVENT {
-                // Parse the key press event bytes manually
-                let data = event.raw_bytes();
-                if data.len() >= 8 {
-                    let detail = data[1]; // keycode
-                    let state = u16::from_ne_bytes([data[4], data[5]]); // modifier state
+            if let x11rb::protocol::Event::KeyPress(kp) = event {
+                let detail = kp.detail; // keycode
+                let state = u16::from(kp.state);
 
-                    // Mask out NumLock and CapsLock
-                    let clean_state = state & !(num_lock_mask | caps_lock_mask);
+                // Mask out NumLock and CapsLock
+                let clean_state = state & !(num_lock_mask | caps_lock_mask);
 
-                    if detail == lookup_keycode && clean_state == lookup.modifiers {
-                        log::debug!("Lookup hotkey pressed");
-                        let _ = self.sender.send(HotkeyEvent::Lookup);
-                    } else if detail == annotate_keycode && clean_state == annotate.modifiers {
-                        log::debug!("Annotate hotkey pressed");
-                        let _ = self.sender.send(HotkeyEvent::Annotate);
-                    }
+                if detail == lookup_keycode && clean_state == lookup.modifiers {
+                    log::debug!("Lookup hotkey pressed");
+                    let _ = self.sender.send(HotkeyEvent::Lookup);
+                } else if detail == annotate_keycode && clean_state == annotate.modifiers {
+                    log::debug!("Annotate hotkey pressed");
+                    let _ = self.sender.send(HotkeyEvent::Annotate);
                 }
             }
         }

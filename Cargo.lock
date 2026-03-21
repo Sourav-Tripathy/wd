@@ -2395,6 +2395,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "gtk4",
+ "libc",
  "log",
  "memmap2",
  "notify-rust",
