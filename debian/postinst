@@ -1,0 +1,54 @@
+#!/bin/bash
+set -e
+
+WORDNET_SYSTEM="/usr/share/wordnet"
+WORDNET_LOCAL="$HOME/.local/share/wd/wordnet"
+WORDNET_URL="https://github.com/globalwordnet/english-wordnet/releases/download/2024-edition/english-wordnet-2024.xml.gz"
+WORDNET_SHA256="placeholder_sha256_replace_with_actual"
+
+# Check if system WordNet is installed
+if [ -d "$WORDNET_SYSTEM/dict" ]; then
+    echo "wd: System WordNet found at $WORDNET_SYSTEM"
+    mkdir -p "$(dirname "$WORDNET_LOCAL")"
+    ln -sfn "$WORDNET_SYSTEM" "$WORDNET_LOCAL"
+else
+    echo "wd: System WordNet not found, downloading..."
+    mkdir -p "$WORDNET_LOCAL"
+
+    # Download WordNet data
+    if command -v wget > /dev/null 2>&1; then
+        wget -q -O "/tmp/wordnet-data.tar.gz" "$WORDNET_URL"
+    elif command -v curl > /dev/null 2>&1; then
+        curl -sL -o "/tmp/wordnet-data.tar.gz" "$WORDNET_URL"
+    else
+        echo "wd: Neither wget nor curl found. Install wordnet-base manually."
+        echo "     sudo apt install wordnet-base"
+        exit 0
+    fi
+
+    # Verify checksum
+    ACTUAL_SHA256=$(sha256sum "/tmp/wordnet-data.tar.gz" | cut -d' ' -f1)
+    if [ "$ACTUAL_SHA256" != "$WORDNET_SHA256" ]; then
+        echo "wd: WARNING: SHA256 checksum mismatch for WordNet data."
+        echo "     Expected: $WORDNET_SHA256"
+        echo "     Got:      $ACTUAL_SHA256"
+        echo "     Install wordnet-base manually: sudo apt install wordnet-base"
+        rm -f "/tmp/wordnet-data.tar.gz"
+        exit 0
+    fi
+
+    # Extract
+    tar -xzf "/tmp/wordnet-data.tar.gz" -C "$WORDNET_LOCAL"
+    rm -f "/tmp/wordnet-data.tar.gz"
+    echo "wd: WordNet data installed to $WORDNET_LOCAL"
+fi
+
+# Enable systemd user service if user session is active
+if [ -n "$DBUS_SESSION_BUS_ADDRESS" ] && command -v systemctl > /dev/null 2>&1; then
+    systemctl --user enable --now wd.service 2>/dev/null || true
+    echo "wd: Daemon enabled via systemd user service"
+else
+    echo "wd: Note — run 'systemctl --user enable --now wd.service' after login to start the daemon"
+fi
+
+exit 0

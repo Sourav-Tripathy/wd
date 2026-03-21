@@ -1,0 +1,16 @@
+Source: wd
+Section: utils
+Priority: optional
+Maintainer: Sourav Tripathy
+Build-Depends: debhelper (>= 12), cargo, rustc
+Standards-Version: 4.5.0
+
+Package: wd
+Architecture: any
+Depends: libgtk-4-1, libdbus-1-3, libglib2.0-0, wordnet-base | wd-wordnet-data, ${shlibs:Depends}, ${misc:Depends}
+Description: Lightweight word-lookup daemon and CLI tool
+ wd is a single binary that looks up word definitions.
+ It operates as a CLI tool (wd <word>) or as a background
+ daemon that watches PDF text selections and responds to
+ global hotkeys. Definitions come from a local WordNet
+ database with automatic Wiktionary fallback.

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=wd
+Comment=Word lookup daemon
+Exec=/usr/bin/wd --daemon
+Hidden=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
