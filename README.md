@@ -9,7 +9,7 @@ A lightweight word-lookup daemon and CLI tool for Linux.
   - Auto-detects text selection in PDF viewers (Evince/Okular) and shows a popup
   - Global hotkey (`Ctrl+Alt+W`) to look up the current text selection from any app
 - **Offline-first** — Uses a local WordNet database with automatic Wiktionary fallback
-- **PDF annotation** — Save definitions as annotations directly in your PDF (`Ctrl+Alt+S`)
+- **PDF annotation** — Save definitions as annotations directly in your PDF (`Ctrl+Alt+S`) (This needs some figuring out)
 - **Lightweight** — Under 4 MB RAM at idle, zero CPU between lookups
 
 ## Install
@@ -98,7 +98,7 @@ Edit `~/.config/wd/config.toml` (created with defaults on first run):
 
 ```toml
 lookup_hotkey = "Ctrl+Alt+W"
-annotate_hotkey = "Ctrl+Alt+S"
+annotate_hotkey = "Ctrl+Alt+S"    (Not working)
 pdf_auto_trigger = true
 popup_timeout_ms = 0
 popup_font_size = 13
