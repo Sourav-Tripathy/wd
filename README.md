@@ -89,7 +89,7 @@ systemctl --user enable --now wd.service
 | Hotkey | Action |
 |--------|--------|
 | `Ctrl+Alt+W` | Look up the current text selection |
-| `Ctrl+Alt+S` | Save definition as PDF annotation (while popup is open) |
+| `Ctrl+Alt+S` | Save definition as PDF annotation (Not able to figure out) | 
 | `Escape` | Dismiss the popup |
 
 ## Configuration
