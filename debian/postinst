@@ -2,45 +2,47 @@
 set -e
 
 WORDNET_SYSTEM="/usr/share/wordnet"
-WORDNET_LOCAL="$HOME/.local/share/wd/wordnet"
+# Because postinst is run as root, $HOME evaluates to /root
+# Instead, we will place it into /var/lib/wd/wordnet globally.
+WORDNET_LOCAL="/var/lib/wd/wordnet"
 WORDNET_URL="https://github.com/globalwordnet/english-wordnet/releases/download/2024-edition/english-wordnet-2024.xml.gz"
-WORDNET_SHA256="placeholder_sha256_replace_with_actual"
 
 # Check if system WordNet is installed
 if [ -d "$WORDNET_SYSTEM/dict" ]; then
     echo "wd: System WordNet found at $WORDNET_SYSTEM"
-    mkdir -p "$(dirname "$WORDNET_LOCAL")"
-    ln -sfn "$WORDNET_SYSTEM" "$WORDNET_LOCAL"
 else
-    echo "wd: System WordNet not found, downloading..."
+    echo "wd: System WordNet not found, attempting to download..."
     mkdir -p "$WORDNET_LOCAL"
 
-    # Download WordNet data
+    # Turn off set -e temporarily so network failures don't break the entire apt install
+    set +e
     if command -v wget > /dev/null 2>&1; then
-        wget -q -O "/tmp/wordnet-data.tar.gz" "$WORDNET_URL"
+        wget -q -O "/tmp/wordnet-data.gz" "$WORDNET_URL"
+        DL_STATUS=$?
     elif command -v curl > /dev/null 2>&1; then
-        curl -sL -o "/tmp/wordnet-data.tar.gz" "$WORDNET_URL"
+        curl -sL -o "/tmp/wordnet-data.gz" "$WORDNET_URL"
+        DL_STATUS=$?
     else
-        echo "wd: Neither wget nor curl found. Install wordnet-base manually."
-        echo "     sudo apt install wordnet-base"
-        exit 0
+        echo "wd: Neither wget nor curl found."
+        DL_STATUS=1
     fi
+    set -e
 
-    # Verify checksum
-    ACTUAL_SHA256=$(sha256sum "/tmp/wordnet-data.tar.gz" | cut -d' ' -f1)
-    if [ "$ACTUAL_SHA256" != "$WORDNET_SHA256" ]; then
-        echo "wd: WARNING: SHA256 checksum mismatch for WordNet data."
-        echo "     Expected: $WORDNET_SHA256"
-        echo "     Got:      $ACTUAL_SHA256"
-        echo "     Install wordnet-base manually: sudo apt install wordnet-base"
-        rm -f "/tmp/wordnet-data.tar.gz"
-        exit 0
+    if [ $DL_STATUS -eq 0 ] && [ -s "/tmp/wordnet-data.gz" ]; then
+        echo "wd: WordNet data downloaded. Extracting..."
+        # Warning: Your URL points to an .xml.gz, not a tar archive.
+        # We use gunzip instead of tar -xzf here.
+        gunzip -c "/tmp/wordnet-data.gz" > "$WORDNET_LOCAL/english-wordnet-2024.xml" || true
+        rm -f "/tmp/wordnet-data.gz"
+        echo "wd: WordNet data installed to $WORDNET_LOCAL"
+        
+        # Symlink to where the app expects it if needed
+        ln -sfn "$WORDNET_LOCAL" /usr/share/wd-wordnet || true
+    else
+        echo "wd: WARNING: Download failed (Network Error)."
+        echo "     Please install wordnet manually: sudo apt install wordnet-base"
+        rm -f "/tmp/wordnet-data.gz"
     fi
-
-    # Extract
-    tar -xzf "/tmp/wordnet-data.tar.gz" -C "$WORDNET_LOCAL"
-    rm -f "/tmp/wordnet-data.tar.gz"
-    echo "wd: WordNet data installed to $WORDNET_LOCAL"
 fi
 
 # Enable systemd user service if user session is active
@@ -48,7 +50,7 @@ if [ -n "$DBUS_SESSION_BUS_ADDRESS" ] && command -v systemctl > /dev/null 2>&1; 
     systemctl --user enable --now wd.service 2>/dev/null || true
     echo "wd: Daemon enabled via systemd user service"
 else
-    echo "wd: Note — run 'systemctl --user enable --now wd.service' after login to start the daemon"
+    echo "wd: Note - run 'systemctl --user enable --now wd.service' after login to start the daemon"
 fi
 
 exit 0

@@ -103,29 +103,65 @@ fn parse_wiktionary_response(
     Ok(definitions)
 }
 
-/// Strip basic HTML tags from Wiktionary responses.
+/// Strip basic HTML tags from Wiktionary responses and decode entities.
 fn strip_html_tags(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut inside_tag = false;
+    let mut in_entity = false;
+    let mut entity_buf = String::new();
 
     for ch in input.chars() {
         if ch == '<' {
             inside_tag = true;
+            in_entity = false;
         } else if ch == '>' {
             inside_tag = false;
         } else if !inside_tag {
-            result.push(ch);
+            if ch == '&' {
+                in_entity = true;
+                entity_buf.clear();
+            } else if in_entity && ch == ';' {
+                in_entity = false;
+                match entity_buf.as_str() {
+                    "amp" => result.push('&'),
+                    "lt" => result.push('<'),
+                    "gt" => result.push('>'),
+                    "quot" => result.push('"'),
+                    "apos" => result.push('\''),
+                    "nbsp" => result.push(' '),
+                    _ => {
+                        let parsed = if entity_buf.starts_with("#x") || entity_buf.starts_with("#X") {
+                            u32::from_str_radix(&entity_buf[2..], 16).ok()
+                        } else if entity_buf.starts_with('#') {
+                            u32::from_str_radix(&entity_buf[1..], 10).ok()
+                        } else {
+                            None
+                        };
+                        
+                        if let Some(code) = parsed.and_then(char::from_u32) {
+                            result.push(code);
+                        } else {
+                            result.push('&');
+                            result.push_str(&entity_buf);
+                            result.push(';');
+                        }
+                    }
+                }
+            } else if in_entity {
+                entity_buf.push(ch);
+                // Bail out if entity gets too long (not a real entity)
+                if entity_buf.len() > 10 {
+                    in_entity = false;
+                    result.push('&');
+                    result.push_str(&entity_buf);
+                }
+            } else {
+                result.push(ch);
+            }
         }
     }
 
-    // Decode common HTML entities
     result
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
 }
 
 /// Simple URL encoding for the word (handles spaces and special chars).

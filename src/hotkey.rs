@@ -5,10 +5,8 @@
 /// Event emitted when a global hotkey is pressed.
 #[derive(Debug, Clone)]
 pub enum HotkeyEvent {
-    /// User pressed the lookup hotkey.
-    Lookup,
-    /// User pressed the annotate hotkey.
-    Annotate,
+    /// User pressed the lookup hotkey. Contains pointer coordinates.
+    Lookup(i32, i32),
 }
 
 /// Parse a hotkey string like "Ctrl+Alt+W" into X11 modifier mask and keycode.
@@ -89,6 +87,11 @@ fn key_name_to_keysym(key: &str) -> Result<u32, String> {
         "F10" => Ok(0xffc7),
         "F11" => Ok(0xffc8),
         "F12" => Ok(0xffc9),
+        // Add robust fallback for single chars
+        other if other.len() == 1 => {
+            let ch = other.chars().next().unwrap();
+            Ok(ch as u32)
+        }
         _ => Err(format!("Unknown key: {}", key)),
     }
 }
@@ -97,7 +100,6 @@ fn key_name_to_keysym(key: &str) -> Result<u32, String> {
 pub struct HotkeyListener {
     sender: tokio::sync::mpsc::UnboundedSender<HotkeyEvent>,
     lookup_hotkey: String,
-    annotate_hotkey: String,
 }
 
 impl HotkeyListener {
@@ -105,12 +107,10 @@ impl HotkeyListener {
     pub fn new(
         sender: tokio::sync::mpsc::UnboundedSender<HotkeyEvent>,
         lookup_hotkey: String,
-        annotate_hotkey: String,
     ) -> Self {
         HotkeyListener {
             sender,
             lookup_hotkey,
-            annotate_hotkey,
         }
     }
 
@@ -124,8 +124,13 @@ impl HotkeyListener {
         let screen = &conn.setup().roots[screen_num];
         let root = screen.root;
 
-        let lookup = parse_hotkey_string(&self.lookup_hotkey)?;
-        let annotate = parse_hotkey_string(&self.annotate_hotkey)?;
+        let lookup = match parse_hotkey_string(&self.lookup_hotkey) {
+            Ok(hk) => hk,
+            Err(e) => {
+                log::warn!("Invalid lookup hotkey '{}': {}", self.lookup_hotkey, e);
+                return Ok(());
+            }
+        };
 
         // Get keycodes from keysyms
         let setup = conn.setup();
@@ -146,22 +151,26 @@ impl HotkeyListener {
         )
         .ok_or_else(|| format!("Cannot find keycode for lookup hotkey: {}", self.lookup_hotkey))?;
 
-        let annotate_keycode = find_keycode(
-            &keyboard_mapping.keysyms,
-            keysyms_per_keycode,
-            min_keycode,
-            annotate.keysym,
-        )
-        .ok_or_else(|| {
-            format!(
-                "Cannot find keycode for annotate hotkey: {}",
-                self.annotate_hotkey
-            )
-        })?;
-
         // Grab the keys on root window
-        // We need to grab with various NumLock/CapsLock combinations
-        let num_lock_mask: u16 = 0x10; // Mod2Mask typically
+        // Find modifier mask for Num_Lock (keysym 0xff7f)
+        let num_lock_keysym = 0xff7f; // XK_Num_Lock
+        let mut num_lock_mask: u16 = 0;
+        let mut num_lock_keycode = 0;
+        
+        if let Some(code) = find_keycode(&keyboard_mapping.keysyms, keysyms_per_keycode, min_keycode, num_lock_keysym) {
+            num_lock_keycode = code;
+        }
+
+        let modmap = conn.get_modifier_mapping()?.reply()?;
+        let kpm = modmap.keycodes_per_modifier() as usize;
+        
+        for (i, chunk) in modmap.keycodes.chunks(kpm).enumerate() {
+            if num_lock_keycode != 0 && chunk.contains(&num_lock_keycode) {
+                num_lock_mask = 1 << i;
+                break;
+            }
+        }
+        
         let caps_lock_mask: u16 = 0x02; // LockMask
         let extra_modifiers: [u16; 4] = [
             0,
@@ -179,24 +188,11 @@ impl HotkeyListener {
                 xproto::GrabMode::ASYNC,
                 xproto::GrabMode::ASYNC,
             )?;
-
-            conn.grab_key(
-                false,
-                root,
-                (annotate.modifiers | extra).into(),
-                annotate_keycode,
-                xproto::GrabMode::ASYNC,
-                xproto::GrabMode::ASYNC,
-            )?;
         }
 
         conn.flush()?;
 
-        log::info!(
-            "Hotkeys registered: lookup={}, annotate={}",
-            self.lookup_hotkey,
-            self.annotate_hotkey
-        );
+        log::info!("Hotkeys registered: lookup={}", self.lookup_hotkey);
 
         // Event loop
         loop {
@@ -211,10 +207,9 @@ impl HotkeyListener {
 
                 if detail == lookup_keycode && clean_state == lookup.modifiers {
                     log::debug!("Lookup hotkey pressed");
-                    let _ = self.sender.send(HotkeyEvent::Lookup);
-                } else if detail == annotate_keycode && clean_state == annotate.modifiers {
-                    log::debug!("Annotate hotkey pressed");
-                    let _ = self.sender.send(HotkeyEvent::Annotate);
+                    if let Ok(pointer) = conn.query_pointer(root)?.reply() {
+                        let _ = self.sender.send(HotkeyEvent::Lookup(pointer.root_x as i32, pointer.root_y as i32));
+                    }
                 }
             }
         }

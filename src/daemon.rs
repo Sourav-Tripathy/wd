@@ -22,6 +22,10 @@ use std::sync::Arc;
 /// 5. Initialise GTK4 application context.
 /// 6. Enter event loop. Process is parked by the kernel. CPU usage: 0.0%.
 pub fn run(config: &Config) {
+    let _rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = _rt.enter();
+
+    let config_arc = Arc::new(config.clone());
     log::info!("Starting wd daemon...");
 
     // Load WordNet index
@@ -53,10 +57,9 @@ pub fn run(config: &Config) {
 
     // Start hotkey listener in its own thread
     let lookup_hotkey = config.lookup_hotkey.clone();
-    let annotate_hotkey = config.annotate_hotkey.clone();
     let hk_tx = hotkey_tx.clone();
     std::thread::spawn(move || {
-        let listener = HotkeyListener::new(hk_tx, lookup_hotkey, annotate_hotkey);
+        let listener = HotkeyListener::new(hk_tx, lookup_hotkey);
         if let Err(e) = listener.run() {
             log::error!("Hotkey listener error: {}", e);
         }
@@ -68,38 +71,37 @@ pub fn run(config: &Config) {
         .build();
     app.connect_activate(move |app| {
         log::info!("GTK4 application activated, entering event loop");
+        // GTK4 requires holding the application alive for daemons that don't immediately open a window.
+        // std::mem::forget ensures the hold is never dropped until process exit.
         std::mem::forget(app.hold());
     });
 
     // Process events from selection watcher
     let app_clone = app.clone();
     let wordnet_sel = wordnet.clone();
-    let config_sel = config.clone();
+    let config_sel = config_arc.clone();
     glib::MainContext::default().spawn_local(async move {
         while let Some(event) = selection_rx.recv().await {
-            handle_lookup(&app_clone, &event.text, &wordnet_sel, &config_sel);
+            handle_lookup(&app_clone, event.text, wordnet_sel.clone(), config_sel.clone(), event.x, event.y);
         }
     });
 
     // Process events from hotkey listener
     let app_clone = app.clone();
     let wordnet_hk = wordnet.clone();
-    let config_hk = config.clone();
+    let config_hk = config_arc.clone();
     glib::MainContext::default().spawn_local(async move {
         while let Some(event) = hotkey_rx.recv().await {
             match event {
-                HotkeyEvent::Lookup => {
+                HotkeyEvent::Lookup(x, y) => {
                     // Read current PRIMARY selection
                     match selection::read_primary_selection() {
                         Ok(text) if !text.is_empty() => {
-                            handle_lookup(&app_clone, &text, &wordnet_hk, &config_hk);
+                            handle_lookup(&app_clone, text, wordnet_hk.clone(), config_hk.clone(), x, y);
                         }
                         Ok(_) => log::debug!("Empty selection, ignoring lookup hotkey"),
                         Err(e) => log::warn!("Failed to read PRIMARY selection: {}", e),
                     }
-                }
-                HotkeyEvent::Annotate => {
-                    log::debug!("Annotate hotkey pressed (annotation handled in popup)");
                 }
             }
         }
@@ -125,29 +127,42 @@ pub fn run(config: &Config) {
 /// Handle a word lookup and show the popup.
 fn handle_lookup(
     app: &gtk4::Application,
-    word: &str,
-    wordnet: &WordNetIndex,
-    config: &Config,
+    word: String,
+    wordnet: Arc<WordNetIndex>,
+    config: Arc<Config>,
+    x: i32,
+    y: i32,
 ) {
-    log::info!("Looking up: {:?}", word);
-
-    match lookup::lookup(word, wordnet, config) {
-        Ok(definitions) => {
-            popup::show(app, &definitions, config.popup_font_size, config.popup_timeout_ms);
-        }
-        Err(e) => {
-            log::debug!("Lookup failed: {}", e);
-            // Optionally show a not-found notification
-            if let Err(notify_err) = notify_rust::Notification::new()
-                .summary("wd")
-                .body(&format!("{}", e))
-                .timeout(3000)
-                .show()
-            {
-                log::debug!("Failed to show notification: {}", notify_err);
+    let app = app.clone();
+    glib::MainContext::default().spawn_local(async move {
+        log::info!("Looking up: {:?}", word);
+        
+        let font_size = config.popup_font_size;
+        let timeout = config.popup_timeout_ms;
+        
+        let result = tokio::task::spawn_blocking(move || {
+            lookup::lookup(&word, &wordnet, &config)
+        }).await;
+        
+        match result {
+            Ok(Ok(definitions)) => {
+                popup::show(&app, definitions, font_size, timeout, x, y);
             }
+            Ok(Err(e)) => {
+                log::debug!("Lookup failed: {}", e);
+                // Optionally show a not-found notification
+                if let Err(notify_err) = notify_rust::Notification::new()
+                    .summary("wd")
+                    .body(&format!("{}", e))
+                    .timeout(3000)
+                    .show()
+                {
+                    log::debug!("Failed to show notification: {}", notify_err);
+                }
+            }
+            Err(e) => log::error!("Task panicked: {}", e),
         }
-    }
+    });
 }
 
 

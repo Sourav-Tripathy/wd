@@ -11,9 +11,11 @@ use gtk4::{
 /// Show a popup window near the cursor with the given definitions.
 pub fn show(
     app: &Application,
-    definitions: &[Definition],
+    definitions: Vec<Definition>,
     font_size: u32,
     timeout_ms: u64,
+    x: i32,
+    y: i32,
 ) {
     let window = ApplicationWindow::builder()
         .application(app)
@@ -24,60 +26,62 @@ pub fn show(
         .resizable(false)
         .build();
 
-    // Apply CSS styling
-    let css = CssProvider::new();
-    css.load_from_data(&format!(
-        r#"
-        window {{
-            background-color: #1e1e2e;
-            border-radius: 12px;
-            border: 1px solid #45475a;
-        }}
-        .popup-container {{
-            padding: 16px;
-        }}
-        .word-header {{
-            color: #cdd6f4;
-            font-size: {}pt;
-            font-weight: bold;
-        }}
-        .pos-label {{
-            color: #a6adc8;
-            font-size: {}pt;
-            font-style: italic;
-        }}
-        .definition-text {{
-            color: #bac2de;
-            font-size: {}pt;
-        }}
-        .example-text {{
-            color: #6c7086;
-            font-size: {}pt;
-            font-style: italic;
-        }}
-        .source-label {{
-            color: #585b70;
-            font-size: {}pt;
-        }}
-        .sense-number {{
-            color: #89b4fa;
-            font-size: {}pt;
-            font-weight: bold;
-        }}
-        "#,
-        font_size + 2,
-        font_size,
-        font_size,
-        font_size.saturating_sub(1),
-        font_size.saturating_sub(2),
-        font_size,
-    ));
+    static CSS_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !CSS_LOADED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        let css = CssProvider::new();
+        css.load_from_data(&format!(
+            r#"
+            window {{
+                background-color: #1e1e2e;
+                border-radius: 12px;
+                border: 1px solid #45475a;
+            }}
+            .popup-container {{
+                padding: 16px;
+            }}
+            .word-header {{
+                color: #cdd6f4;
+                font-size: {}pt;
+                font-weight: bold;
+            }}
+            .pos-label {{
+                color: #a6adc8;
+                font-size: {}pt;
+                font-style: italic;
+            }}
+            .definition-text {{
+                color: #bac2de;
+                font-size: {}pt;
+            }}
+            .example-text {{
+                color: #6c7086;
+                font-size: {}pt;
+                font-style: italic;
+            }}
+            .source-label {{
+                color: #585b70;
+                font-size: {}pt;
+            }}
+            .sense-number {{
+                color: #89b4fa;
+                font-size: {}pt;
+                font-weight: bold;
+            }}
+            "#,
+            font_size + 2,
+            font_size,
+            font_size,
+            font_size.saturating_sub(1),
+            font_size.saturating_sub(2),
+            font_size,
+        ));
 
-    gtk4::style_context_add_provider_for_display(
-        &gdk::Display::default().expect("Could not get default display"),
-        &css,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+        gtk4::style_context_add_provider_for_display(
+            &gdk::Display::default().expect("Could not get default display"),
+            &css,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
 
     // Build content
     let container = GtkBox::new(Orientation::Vertical, 8);
@@ -159,14 +163,6 @@ pub fn show(
     });
     window.add_controller(event_controller);
 
-    // Focus-out to dismiss
-    let focus_controller = gtk4::EventControllerFocus::new();
-    let window_clone = window.clone();
-    focus_controller.connect_leave(move |_| {
-        window_clone.close();
-    });
-    window.add_controller(focus_controller);
-
     // Auto-dismiss timeout
     if timeout_ms > 0 {
         let window_clone = window.clone();
@@ -178,65 +174,58 @@ pub fn show(
         );
     }
 
+    window.set_opacity(0.0);
     window.present();
 
-    // In GTK4, explicit window positioning is removed from the API because 
-    // Wayland delegates it entirely to the compositor. However, since we run 
-    // under X11 (XWayland), we can use x11rb to manually find our window and 
-    // move it directly to the mouse cursor!
+    // Dual-staged positioning to defeat Wayland/XWayland compositing lag.
+    let window_for_opacity = window.clone();
     glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
-        std::thread::spawn(move || {
-            // Give GTK a moment to map the window to the X server
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            move_window_to_cursor_x11();
+        // Move natively
+        move_window_to_cursor_x11(x, y);
+        
+        // Wait another 40ms for the compositor to actually render the new coordinates 
+        // before we make the window visible, guaranteeing zero blips.
+        glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+            window_for_opacity.set_opacity(1.0);
         });
     });
 }
 
-/// Uses x11rb to query the pointer, find the `wd` popup window, and move it.
-fn move_window_to_cursor_x11() {
+fn move_window_to_cursor_x11(cx: i32, cy: i32) {
     use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, ConfigureWindowAux};
+    use x11rb::protocol::xproto::{AtomEnum, ConfigureWindowAux, ConnectionExt};
 
     if let Ok((conn, screen_num)) = x11rb::connect(None) {
         let root = conn.setup().roots[screen_num].root;
 
-        // Get cursor position
-        if let Ok(c) = conn.query_pointer(root) {
-            if let Ok(ptr) = c.reply() {
-                let cx = ptr.root_x as i32;
-                let cy = ptr.root_y as i32;
+        let mut target_window = None;
+        let wm_name = conn.intern_atom(false, b"WM_NAME").unwrap().reply().unwrap().atom;
 
-                let wm_name = conn.intern_atom(false, b"WM_NAME").unwrap().reply().unwrap().atom;
+        // Simple BFS to find the most recent window with title "wd"
+        let mut queue = vec![root];
 
-                // Simple BFS to find the window with title "wd"
-                let mut queue = vec![root];
-                let mut target_window = None;
-
-                while let Some(w) = queue.pop() {
-                    if let Ok(c_prop) = conn.get_property(false, w, wm_name, AtomEnum::ANY, 0, 1024) {
-                        if let Ok(prop) = c_prop.reply() {
-                            let val = String::from_utf8_lossy(&prop.value);
-                            if val == "wd" {
-                                target_window = Some(w);
-                                break;
-                            }
-                        }
+        while let Some(w) = queue.pop() {
+            if let Ok(c_prop) = conn.get_property(false, w, wm_name, AtomEnum::ANY, 0, 1024) {
+                if let Ok(prop) = c_prop.reply() {
+                    let val = String::from_utf8_lossy(&prop.value);
+                    if val == "wd" {
+                        target_window = Some(w);
+                        break;
                     }
-                    if let Ok(c_tree) = conn.query_tree(w) {
-                        if let Ok(tree) = c_tree.reply() {
-                            // Extend with children
-                            queue.extend(tree.children);
-                        }
-                    }
-                }
-
-                if let Some(w) = target_window {
-                    // Found our window! Move it slightly below and right of the cursor
-                    let _ = conn.configure_window(w, &ConfigureWindowAux::new().x(cx + 10).y(cy + 10));
-                    let _ = conn.flush();
                 }
             }
+            if let Ok(c_tree) = conn.query_tree(w) {
+                if let Ok(tree) = c_tree.reply() {
+                    // Extend with children
+                    queue.extend(tree.children);
+                }
+            }
+        }
+
+        if let Some(w) = target_window {
+            // Found our window! Move it slightly below and right of the cursor
+            let _ = conn.configure_window(w, &ConfigureWindowAux::new().x(cx + 10).y(cy + 10));
+            let _ = conn.flush();
         }
     }
 }

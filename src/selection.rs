@@ -12,10 +12,22 @@ pub const PDF_VIEWER_CLASSES: &[&str] = &[
     "org.kde.okular",
 ];
 
+/// Known PDF viewer process names for _NET_WM_PID fallback.
+pub const PDF_VIEWER_PROCESSES: &[&str] = &[
+    "evince",
+    "okular",
+    "epdfview",
+    "mupdf",
+    "zathura",
+    "qpdfview",
+];
+
 /// Event emitted when a word is selected in a PDF viewer.
 #[derive(Debug, Clone)]
 pub struct SelectionEvent {
     pub text: String,
+    pub x: i32,
+    pub y: i32,
 }
 
 /// X11 PRIMARY selection watcher.
@@ -126,13 +138,24 @@ impl SelectionWatcher {
                     .owner;
 
                 log::debug!("Selection owner window: {}", selection_owner);
-                if selection_owner == 0 {
-                    continue;
+
+                // Wayland proxy clipboard windows might not have WM_CLASS or PID. 
+                // Thus, we also check the active window!
+                let active_window_atom = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW")?.reply()?.atom;
+                let active_window = match conn.get_property(false, root, active_window_atom, xproto::AtomEnum::ANY, 0, 1)?.reply() {
+                    Ok(prop) => prop.value32().and_then(|mut iter| iter.next()).unwrap_or(0),
+                    Err(_) => 0,
+                };
+
+                let mut is_pdf = false;
+                if selection_owner != 0 && self.is_pdf_viewer_window(&conn, selection_owner) {
+                    is_pdf = true;
+                } else if active_window != 0 && self.is_pdf_viewer_window(&conn, active_window) {
+                    is_pdf = true;
                 }
 
-                // Check if the owner window belongs to a PDF viewer
-                if !self.is_pdf_viewer_window(&conn, selection_owner) {
-                    log::debug!("Selection owner is not a PDF viewer, skipping");
+                if !is_pdf {
+                    log::debug!("Neither selection owner nor active window is a PDF viewer, skipping");
                     continue;
                 }
 
@@ -163,12 +186,17 @@ impl SelectionWatcher {
 
                 if let Ok(text) = String::from_utf8(prop.value) {
                     let text = text.trim().to_string();
-                    if !text.is_empty() && text.split_whitespace().count() <= 3 {
+                    if !text.is_empty() && text.split_whitespace().take(4).count() <= 3 {
                         // Only trigger for single words or short phrases
                         log::debug!("PDF selection detected: {:?}", text);
-                        let _ = self.sender.send(SelectionEvent { text });
+                        let pointer = conn.query_pointer(root)?.reply()?;
+                        let _ = self.sender.send(SelectionEvent { 
+                            text, 
+                            x: pointer.root_x as i32, 
+                            y: pointer.root_y as i32 
+                        });
                     } else if !text.is_empty() {
-                        log::debug!("Selection too long ({}), ignoring: {:?}", text.split_whitespace().count(), &text[..text.len().min(50)]);
+                        log::debug!("Selection too long, ignoring: {:?}", &text[..text.len().min(50)]);
                     }
                 }
             }
@@ -210,12 +238,12 @@ impl SelectionWatcher {
                     Ok(prop) => prop,
                     Err(e) => {
                         log::debug!("get_property reply error at depth {}: {:?}", depth, e);
-                        return false;
+                        break;
                     }
                 },
                 Err(e) => {
                     log::debug!("get_property error at depth {}: {:?}", depth, e);
-                    return false;
+                    break;
                 }
             };
 
@@ -225,8 +253,8 @@ impl SelectionWatcher {
                     Ok(cookie) => match cookie.reply() {
                         Ok(tree) => {
                             if tree.parent == current_window || tree.parent == 0 || tree.parent == tree.root {
-                                log::debug!("Reached root/null at depth {}. Treating as Wayland proxy window.", depth);
-                                return false; // Reverted: Global popup User can make this true if they want
+                                log::debug!("Reached root/null at depth {}. Treating as Wayland proxy window, proceeding to fallback.", depth);
+                                break;
                             }
                             log::debug!("WM_CLASS empty on win {}, trying parent: {}", current_window, tree.parent);
                             current_window = tree.parent;
@@ -264,6 +292,90 @@ impl SelectionWatcher {
             // If we found a WM_CLASS but it didn't match, we stop traversing.
             log::debug!("WM_CLASS found but no match. Not a PDF viewer.");
             return false;
+        }
+
+        // --- Stage 2: _NET_WM_PID fallback for XWayland proxy windows ---
+        log::debug!("WM_CLASS traversal exhausted without finding an identity. Trying _NET_WM_PID fallback.");
+
+        let net_wm_pid_atom = match conn.intern_atom(false, b"_NET_WM_PID") {
+            Ok(cookie) => match cookie.reply() {
+                Ok(reply) => reply.atom,
+                Err(_) => return false,
+            },
+            Err(_) => return false,
+        };
+
+        let mut current_window = window; // Restart from original selection owner window
+        
+        for depth in 0..10 {
+            if current_window == 0 {
+                break;
+            }
+
+            let prop = match conn.get_property(
+                false,
+                current_window,
+                net_wm_pid_atom,
+                x11rb::protocol::xproto::AtomEnum::ANY,
+                0,
+                1,
+            ) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(prop) => prop,
+                    Err(e) => {
+                        log::debug!("_NET_WM_PID get_property reply error at depth {}: {:?}", depth, e);
+                        break;
+                    }
+                },
+                Err(e) => {
+                    log::debug!("_NET_WM_PID get_property error at depth {}: {:?}", depth, e);
+                    break;
+                }
+            };
+
+            if let Some(mut iter) = prop.value32() {
+                if let Some(pid) = iter.next() {
+                    log::debug!("_NET_WM_PID found on win {}: {}", current_window, pid);
+                    let comm_path = format!("/proc/{}/comm", pid);
+                    if let Ok(comm) = std::fs::read_to_string(&comm_path) {
+                        let comm = comm.trim().to_lowercase();
+                        log::debug!("Process name for PID {}: {}", pid, comm);
+                        for process_name in PDF_VIEWER_PROCESSES {
+                            if comm == *process_name {
+                                log::debug!("PDF viewer process detected via _NET_WM_PID: {:?}", comm);
+                                return true;
+                            }
+                        }
+                        log::debug!("Process name {} did not match any known PDF viewer", comm);
+                        return false;
+                    } else {
+                        log::debug!("Failed to read {}", comm_path);
+                        return false;
+                    }
+                }
+            }
+
+            // _NET_WM_PID not found, try parent window
+            match conn.query_tree(current_window) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(tree) => {
+                        if tree.parent == current_window || tree.parent == 0 || tree.parent == tree.root {
+                            log::debug!("Reached root/null at depth {} trying to find _NET_WM_PID.", depth);
+                            break;
+                        }
+                        log::debug!("_NET_WM_PID empty on win {}, trying parent: {}", current_window, tree.parent);
+                        current_window = tree.parent;
+                    }
+                    Err(e) => {
+                        log::debug!("query_tree reply error for _NET_WM_PID: {:?}", e);
+                        break;
+                    }
+                },
+                Err(e) => {
+                    log::debug!("query_tree error for _NET_WM_PID: {:?}", e);
+                    break;
+                }
+            }
         }
 
         false
@@ -308,12 +420,20 @@ pub fn read_primary_selection() -> Result<String, Box<dyn std::error::Error>> {
     )?;
     conn.flush()?;
 
-    // Wait for SelectionNotify
+    // Wait for SelectionNotify with timeout
+    let mut wait_time = 0;
     loop {
-        let event = conn.wait_for_event()?;
-        let event_type = event.response_type() & 0x7f;
-        if event_type == xproto::SELECTION_NOTIFY_EVENT {
-            break;
+        if let Some(event) = conn.poll_for_event()? {
+            let event_type = event.response_type() & 0x7f;
+            if event_type == xproto::SELECTION_NOTIFY_EVENT {
+                break;
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            wait_time += 10;
+            if wait_time > 1000 {
+                return Err("Timeout waiting for SelectionNotify".into());
+            }
         }
     }
 

@@ -11,10 +11,6 @@ pub struct Config {
     #[serde(default = "default_lookup_hotkey")]
     pub lookup_hotkey: String,
 
-    /// Hotkey to save definition as PDF annotation while popup is open.
-    #[serde(default = "default_annotate_hotkey")]
-    pub annotate_hotkey: String,
-
     /// Auto-lookup text selected inside Evince or Okular.
     #[serde(default = "default_pdf_auto_trigger")]
     pub pdf_auto_trigger: bool,
@@ -30,18 +26,10 @@ pub struct Config {
     /// Maximum definitions shown per word sense.
     #[serde(default = "default_max_definitions")]
     pub max_definitions: usize,
-
-    /// Include a usage example in the annotation note body.
-    #[serde(default = "default_annotate_include_example")]
-    pub annotate_include_example: bool,
 }
 
 fn default_lookup_hotkey() -> String {
     "Ctrl+Alt+W".to_string()
-}
-
-fn default_annotate_hotkey() -> String {
-    "Ctrl+Alt+S".to_string()
 }
 
 fn default_pdf_auto_trigger() -> bool {
@@ -56,20 +44,14 @@ fn default_max_definitions() -> usize {
     3
 }
 
-fn default_annotate_include_example() -> bool {
-    true
-}
-
 impl Default for Config {
     fn default() -> Self {
         Config {
             lookup_hotkey: default_lookup_hotkey(),
-            annotate_hotkey: default_annotate_hotkey(),
             pdf_auto_trigger: default_pdf_auto_trigger(),
             popup_timeout_ms: 0,
             popup_font_size: default_popup_font_size(),
             max_definitions: default_max_definitions(),
-            annotate_include_example: default_annotate_include_example(),
         }
     }
 }

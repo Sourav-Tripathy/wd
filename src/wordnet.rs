@@ -3,21 +3,24 @@
 
 use crate::types::{Definition, LookupError, LookupSource, PoS, Sense};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
 use std::path::Path;
+use memmap2::Mmap;
 
 /// In-memory WordNet index built from the dict files.
 #[derive(Debug)]
 pub struct WordNetIndex {
-    /// Map from lemma (lowercase) to a list of definitions grouped by PoS.
+    /// Map from lemma (lowercase) to a list of entries grouped by PoS.
     entries: HashMap<String, Vec<WordNetEntry>>,
+    /// Memory-mapped data files keyed by PoS character ('n', 'v', 'a', 'r').
+    data_maps: HashMap<char, Mmap>,
 }
 
 #[derive(Debug, Clone)]
 struct WordNetEntry {
     pos: PoS,
-    synset_offset: u64,
-    senses: Vec<Sense>,
+    pos_char: char,
+    synset_offsets: Vec<u64>,
 }
 
 /// Morphological exception rules for English.
@@ -87,12 +90,12 @@ impl WordNetIndex {
     pub fn new() -> Self {
         WordNetIndex {
             entries: HashMap::new(),
+            data_maps: HashMap::new(),
         }
     }
 
     /// Load the WordNet index from the dict directory.
-    /// Parses `index.noun`, `index.verb`, `index.adj`, `index.adv` and
-    /// their corresponding `data.*` files.
+    /// Mmaps `data.*` files and parses `index.*` files lazily.
     pub fn load(dict_dir: &Path) -> Result<Self, LookupError> {
         let mut index = WordNetIndex::new();
 
@@ -116,15 +119,21 @@ impl WordNetIndex {
                 continue;
             }
 
-            let data_contents = fs::read_to_string(&data_path).map_err(|e| {
-                LookupError::ParseError(format!("Failed to read {}: {}", data_path.display(), e))
+            // Memory-map the data file
+            let file = File::open(&data_path).map_err(|e| {
+                LookupError::ParseError(format!("Failed to open {}: {}", data_path.display(), e))
             })?;
+            let mmap = unsafe { Mmap::map(&file) }.map_err(|e| {
+                LookupError::ParseError(format!("Failed to mmap {}: {}", data_path.display(), e))
+            })?;
+            index.data_maps.insert(*pos_char, mmap);
 
+            // Load and parse index file
             let index_contents = fs::read_to_string(&index_path).map_err(|e| {
                 LookupError::ParseError(format!("Failed to read {}: {}", index_path.display(), e))
             })?;
 
-            index.parse_index_file(&index_contents, &data_contents, *pos_char)?;
+            index.parse_index_file(&index_contents, *pos_char)?;
         }
 
         // Also load exception files for morphological lookup
@@ -137,16 +146,12 @@ impl WordNetIndex {
         Ok(index)
     }
 
-    /// Parse a WordNet index file and correlate with data file.
+    /// Parse a WordNet index file into memory tracking offsets.
     fn parse_index_file(
         &mut self,
         index_contents: &str,
-        data_contents: &str,
         pos_char: char,
     ) -> Result<(), LookupError> {
-        // Pre-parse data file into a map of offset -> (definitions, examples)
-        let data_map = Self::parse_data_file(data_contents, pos_char)?;
-
         for line in index_contents.lines() {
             // Skip comment lines (start with space or two spaces in WordNet format)
             if line.starts_with("  ") || line.is_empty() {
@@ -159,7 +164,6 @@ impl WordNetIndex {
             }
 
             let lemma = parts[0].replace('_', " ").to_lowercase();
-            let _pos = parts[1]; // Already known from file
             let synset_cnt: usize = match parts[2].parse() {
                 Ok(n) => n,
                 Err(_) => continue,
@@ -169,8 +173,13 @@ impl WordNetIndex {
                 Err(_) => continue,
             };
 
-            // Skip pointer symbols: ptr_cnt items after index 4
-            let synset_start = 4 + ptr_cnt + 2; // +2 for sense_cnt and tagsense_cnt fields
+            // WordNet index format:
+            // lemma pos synset_cnt p_cnt [ptr_symbol...] sense_cnt tagsense_cnt synset_offset...
+            // - ptr_cnt items start at index 4.
+            // - sense_cnt field is at index `4 + ptr_cnt`.
+            // - tagsense_cnt field is at index `4 + ptr_cnt + 1`.
+            // - synset offsets start at index `4 + ptr_cnt + 2`.
+            let synset_start = 4 + ptr_cnt + 2; 
 
             // Collect synset offsets
             let mut synsets = Vec::new();
@@ -183,19 +192,11 @@ impl WordNetIndex {
                 }
             }
 
-            // Build senses from synset offsets
-            let mut senses = Vec::new();
-            for offset in &synsets {
-                if let Some(sense) = data_map.get(offset) {
-                    senses.push(sense.clone());
-                }
-            }
-
-            if !senses.is_empty() {
+            if !synsets.is_empty() {
                 let entry = WordNetEntry {
                     pos: PoS::from_wordnet_char(pos_char),
-                    synset_offset: synsets.first().copied().unwrap_or(0),
-                    senses,
+                    pos_char,
+                    synset_offsets: synsets,
                 };
                 self.entries
                     .entry(lemma)
@@ -207,52 +208,26 @@ impl WordNetIndex {
         Ok(())
     }
 
-    /// Parse a WordNet data file into a map of offset -> Sense.
-    fn parse_data_file(
-        contents: &str,
-        _pos_char: char,
-    ) -> Result<HashMap<u64, Sense>, LookupError> {
-        let mut map = HashMap::new();
-
-        for line in contents.lines() {
-            // Skip comment lines
-            if line.starts_with("  ") || line.is_empty() {
-                continue;
-            }
-
-            // Format: synset_offset lex_filenum ss_type w_cnt word lex_id ... | gloss
-            let parts: Vec<&str> = line.splitn(2, " | ").collect();
-            if parts.len() < 2 {
-                continue;
-            }
-
-            let header = parts[0];
-            let gloss = parts[1].trim();
-
-            // Parse the offset from the header
-            let header_parts: Vec<&str> = header.split_whitespace().collect();
-            if header_parts.is_empty() {
-                continue;
-            }
-
-            let offset: u64 = match header_parts[0].parse() {
-                Ok(o) => o,
-                Err(_) => continue,
-            };
-
-            // Parse the gloss: definition ; "example"
-            let (definition, example) = Self::parse_gloss(gloss);
-
-            map.insert(
-                offset,
-                Sense {
-                    definition,
-                    example,
-                },
-            );
+    /// Lazily parse a single data line from memory mapped byte buffer.
+    fn read_sense_lazy(&self, pos_char: char, offset: u64) -> Option<Sense> {
+        let mmap = self.data_maps.get(&pos_char)?;
+        if offset as usize >= mmap.len() {
+            return None;
         }
 
-        Ok(map)
+        let slice = &mmap[offset as usize..];
+        let newline_pos = slice.iter().position(|&b| b == b'\n').unwrap_or(slice.len());
+        let line = std::str::from_utf8(&slice[..newline_pos]).ok()?;
+
+        // Format: synset_offset lex_filenum ss_type w_cnt word lex_id ... | gloss
+        let parts: Vec<&str> = line.splitn(2, " | ").collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        let gloss = parts[1].trim();
+
+        let (definition, example) = Self::parse_gloss(gloss);
+        Some(Sense { definition, example })
     }
 
     /// Parse a WordNet gloss into (definition, optional example).
@@ -311,14 +286,18 @@ impl WordNetIndex {
         let normalised = word.to_lowercase().trim().to_string();
 
         // Direct lookup
-        if let Some(definitions) = self.lookup_exact(&normalised) {
-            return Some(definitions);
+        if let Some(ref definitions) = self.lookup_exact(&normalised) {
+            if !definitions.is_empty() {
+                return Some(definitions.clone());
+            }
         }
 
         // Try morphological variants
         for variant in self.morphological_variants(&normalised) {
-            if let Some(definitions) = self.lookup_exact(&variant) {
-                return Some(definitions);
+            if let Some(ref definitions) = self.lookup_exact(&variant) {
+                if !definitions.is_empty() {
+                    return Some(definitions.clone());
+                }
             }
         }
 
@@ -330,11 +309,23 @@ impl WordNetIndex {
         self.entries.get(word).map(|entries| {
             entries
                 .iter()
-                .map(|e| Definition {
-                    word: word.to_string(),
-                    pos: e.pos.clone(),
-                    senses: e.senses.clone(),
-                    source: LookupSource::WordNet,
+                .filter_map(|e| {
+                    let mut senses = Vec::new();
+                    for &offset in &e.synset_offsets {
+                        if let Some(s) = self.read_sense_lazy(e.pos_char, offset) {
+                            senses.push(s);
+                        }
+                    }
+                    if senses.is_empty() {
+                        None
+                    } else {
+                        Some(Definition {
+                            word: word.to_string(),
+                            pos: e.pos.clone(),
+                            senses,
+                            source: LookupSource::WordNet,
+                        })
+                    }
                 })
                 .collect()
         })
@@ -372,6 +363,13 @@ impl WordNetIndex {
                     variants.push(v);
                 }
 
+                // 'ves' -> 'f' / 'fe' (e.g. knives -> knife, leaves -> leaf)
+                if word.ends_with("ves") {
+                    let stem = &word[..word.len() - 3];
+                    variants.push(format!("{}f", stem));
+                    variants.push(format!("{}fe", stem));
+                }
+
                 // 'ses', 'xes', 'zes' -> remove 'es'
                 if word.ends_with("ses") || word.ends_with("xes") || word.ends_with("zes") {
                     variants.push(word[..word.len() - 2].to_string());
@@ -381,12 +379,9 @@ impl WordNetIndex {
 
         // Common verb forms
         if word.ends_with("ing") {
-            // 'running' -> 'run' (doubled consonant)
             let stem = &word[..word.len() - 3];
             variants.push(stem.to_string());
-            // 'making' -> 'make' (dropped 'e')
             variants.push(format!("{}e", stem));
-            // 'running' -> 'runn' then check 'run' (double consonant)
             if stem.len() >= 2 {
                 let bytes = stem.as_bytes();
                 if bytes[bytes.len() - 1] == bytes[bytes.len() - 2] {
@@ -399,7 +394,6 @@ impl WordNetIndex {
             let stem = &word[..word.len() - 2];
             variants.push(stem.to_string());
             variants.push(format!("{}e", stem));
-            // Doubled consonant
             if stem.len() >= 2 {
                 let bytes = stem.as_bytes();
                 if bytes[bytes.len() - 1] == bytes[bytes.len() - 2] {
@@ -411,13 +405,25 @@ impl WordNetIndex {
         if word.ends_with("er") {
             let stem = &word[..word.len() - 2];
             variants.push(stem.to_string());
-            variants.push(format!("{}e", stem));
+            variants.push(format!("{}e", stem)); // e.g., larger -> large
+            
+            // 'ier' -> 'y' (e.g. happier -> happy)
+            if word.ends_with("ier") {
+                let base = &word[..word.len() - 3];
+                variants.push(format!("{}y", base));
+            }
         }
 
         if word.ends_with("est") {
             let stem = &word[..word.len() - 3];
             variants.push(stem.to_string());
             variants.push(format!("{}e", stem));
+            
+            // 'iest' -> 'y'
+            if word.ends_with("iest") {
+                let base = &word[..word.len() - 4];
+                variants.push(format!("{}y", base));
+            }
         }
 
         if word.ends_with("ly") {
@@ -425,6 +431,8 @@ impl WordNetIndex {
             variants.push(stem.to_string());
         }
 
+        variants.sort();
+        variants.dedup();
         variants
     }
 }

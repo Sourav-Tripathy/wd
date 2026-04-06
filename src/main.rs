@@ -1,6 +1,5 @@
 //! Entry point. Parses argv. Routes to daemon mode or CLI mode. No business logic.
 
-mod annotation;
 mod cli;
 mod config;
 mod daemon;
@@ -52,7 +51,9 @@ fn main() {
         daemon::run(&config);
     } else if let Some(word) = args.word {
         // CLI mode
-        cli::run(&word, &config);
+        if cli::run(&word, &config).is_err() {
+            std::process::exit(1);
+        }
     } else {
         // No arguments: print help
         use clap::CommandFactory;

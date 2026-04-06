@@ -7,7 +7,7 @@ use crate::wordnet::WordNetIndex;
 use std::process;
 
 /// Run a CLI word lookup. Prints formatted output and exits.
-pub fn run(word: &str, config: &Config) {
+pub fn run(word: &str, config: &Config) -> Result<(), ()> {
     // Load WordNet index
     let wordnet_dir = Config::wordnet_dir();
     let wordnet = match WordNetIndex::load(&wordnet_dir) {
@@ -22,15 +22,15 @@ pub fn run(word: &str, config: &Config) {
     match lookup::lookup(word, &wordnet, config) {
         Ok(definitions) => {
             print_definitions(&definitions);
-            process::exit(0);
+            Ok(())
         }
         Err(LookupError::NotFound(w)) => {
             eprintln!("wd: no definition found for '{}'", w);
-            process::exit(1);
+            Err(())
         }
         Err(e) => {
             eprintln!("{}", e);
-            process::exit(1);
+            Err(())
         }
     }
 }
