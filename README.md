@@ -111,11 +111,12 @@ max_definitions = 3
 
 ## Current Limitations & Known Issues
 
-`wd` currently relies heavily on X11 APIs (via `x11rb`) for global hotkeys, window identification, and popup placement. Because of this, using it under **Wayland** introduces several quirks:
+`wd` currently relies on X11 APIs (via `x11rb`) for global hotkeys, window identification, and popup placement. Because of this, using it under **Wayland** introduces several characteristics:
 
 1. **Wayland Global Hotkeys**: On strict Wayland compositors (like GNOME), global hotkeys (`Ctrl+Alt+W`) will only fire if an X11/XWayland window is currently in focus. Less restrictive compositors (like KDE Plasma) usually allow global X11 shortcuts out-of-the-box.
-2. **Cursor Snapping**: GTK4 natively hands over all window positioning to the Wayland compositor. To force the definition popup to render near your cursor, we use a manual X11 coordinate override. **For this to work cleanly, the daemon must be run with `GDK_BACKEND=x11`.**
-3. **Linux Only**: Heavily coupled to D-Bus, X11, and Linux filesystem structures.
+2. **Wayland PDF Viewer Compatibility**: To auto-trigger lookups on highlighted text under Wayland, PDF viewers (like Evince or Okular) must run under XWayland. The daemon automatically handles this on startup by creating user-local launcher overrides under `~/.local/share/applications/` to force these PDF viewers to use the X11 backend (`GDK_BACKEND=x11` for Evince, `QT_QPA_PLATFORM=xcb` for Okular).
+3. **Cursor Snapping**: The definition popup snaps centered directly above the cursor/selection, clamping within screen boundaries. If the selection is at the very top of the screen, the popup automatically shifts below the cursor. **For cursor snapping to work cleanly, the daemon must run with `GDK_BACKEND=x11`.**
+4. **Linux Only**: Coupled to D-Bus, X11, and Linux filesystem structures.
 
 ## Contributing
 
@@ -123,7 +124,7 @@ Contributions are incredibly welcome! I am specifically looking for help migrati
 
 **Note:** The CLI and the Global Hotkey (`Ctrl+Alt+W`) currently work flawlessly across all desktop environments!
 
-**Open Issues you can help solve (See `problems_to_fix.md` for detailed mechanical breakdowns):**
+**Open Issues you can help solve (See `problems_to_fix.md` for resolved glitches):**
 - **Native Wayland Selection Watcher:** Implement a Wayland-native text selection monitor (e.g., using the `wlr-data-control` protocol) to replace the current `XFixes` dependency. 
 - **Wayland Global Hotkeys:** Support Wayland global shortcuts (e.g., via the `xdg-desktop-portal` `GlobalShortcuts` interface) instead of X11-specific global keyboard grabs.
 - **GTK4 Notification Placement:** Find a clean, native approach to placing GTK4 popup windows precisely at the cursor coordinates within a strict Wayland environment (perhaps via the GTK Layer Shell).
