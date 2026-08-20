@@ -247,47 +247,51 @@ impl SelectionWatcher {
                 }
             };
 
-            if !prop.value.is_empty() {
-                // WM_CLASS is two null-terminated strings: instance\0class\0
-                // We must split on null bytes, not treat as a single UTF-8 string
-                let segments: Vec<&[u8]> = prop.value.split(|&b| b == 0).collect();
-                for seg in &segments {
-                    if seg.is_empty() {
-                        continue;
-                    }
-                    let seg_str = String::from_utf8_lossy(seg).to_lowercase();
-                    log::debug!("WM_CLASS segment found on win {}: {:?}", current_window, seg_str);
-                    for class_name in PDF_VIEWER_CLASSES {
-                        if seg_str.contains(&class_name.to_lowercase()) {
-                            log::debug!("PDF viewer detected: {:?}", seg_str);
-                            return true;
+            if prop.value.is_empty() {
+                // Try parent window
+                match conn.query_tree(current_window) {
+                    Ok(cookie) => match cookie.reply() {
+                        Ok(tree) => {
+                            if tree.parent == current_window || tree.parent == 0 || tree.parent == tree.root {
+                                log::debug!("Reached root/null at depth {}. Treating as Wayland proxy window, proceeding to fallback.", depth);
+                                break;
+                            }
+                            log::debug!("WM_CLASS empty on win {}, trying parent: {}", current_window, tree.parent);
+                            current_window = tree.parent;
+                            continue;
                         }
-                    }
-                }
-                log::debug!("WM_CLASS found on win {} but no match.", current_window);
-            }
-
-            // Try parent window
-            match conn.query_tree(current_window) {
-                Ok(cookie) => match cookie.reply() {
-                    Ok(tree) => {
-                        if tree.parent == current_window || tree.parent == 0 || tree.parent == tree.root {
-                            log::debug!("Reached root/null at depth {}. Treating as Wayland proxy window, proceeding to fallback.", depth);
+                        Err(e) => {
+                            log::debug!("query_tree reply error: {:?}", e);
                             break;
                         }
-                        log::debug!("WM_CLASS empty/mismatched on win {}, trying parent: {}", current_window, tree.parent);
-                        current_window = tree.parent;
-                    }
+                    },
                     Err(e) => {
-                        log::debug!("query_tree reply error: {:?}", e);
+                        log::debug!("query_tree error: {:?}", e);
                         break;
                     }
-                },
-                Err(e) => {
-                    log::debug!("query_tree error: {:?}", e);
-                    break;
                 }
             }
+
+            // WM_CLASS is two null-terminated strings: instance\0class\0
+            // We must split on null bytes, not treat as a single UTF-8 string
+            let segments: Vec<&[u8]> = prop.value.split(|&b| b == 0).collect();
+            for seg in &segments {
+                if seg.is_empty() {
+                    continue;
+                }
+                let seg_str = String::from_utf8_lossy(seg).to_lowercase();
+                log::debug!("WM_CLASS segment found on win {}: {:?}", current_window, seg_str);
+                for class_name in PDF_VIEWER_CLASSES {
+                    if seg_str.contains(&class_name.to_lowercase()) {
+                        log::debug!("PDF viewer detected: {:?}", seg_str);
+                        return true;
+                    }
+                }
+            }
+            
+            // If we found a WM_CLASS but it didn't match, we stop traversing.
+            log::debug!("WM_CLASS found but no match. Not a PDF viewer.");
+            return false;
         }
 
         // --- Stage 2: _NET_WM_PID fallback for XWayland proxy windows ---
@@ -342,14 +346,16 @@ impl SelectionWatcher {
                                 return true;
                             }
                         }
-                        log::debug!("Process name {} did not match any known PDF viewer. Continuing to parent.", comm);
+                        log::debug!("Process name {} did not match any known PDF viewer", comm);
+                        return false;
                     } else {
                         log::debug!("Failed to read {}", comm_path);
+                        return false;
                     }
                 }
             }
 
-            // _NET_WM_PID not found or not matched, try parent window
+            // _NET_WM_PID not found, try parent window
             match conn.query_tree(current_window) {
                 Ok(cookie) => match cookie.reply() {
                     Ok(tree) => {
@@ -357,7 +363,7 @@ impl SelectionWatcher {
                             log::debug!("Reached root/null at depth {} trying to find _NET_WM_PID.", depth);
                             break;
                         }
-                        log::debug!("_NET_WM_PID empty/mismatched on win {}, trying parent: {}", current_window, tree.parent);
+                        log::debug!("_NET_WM_PID empty on win {}, trying parent: {}", current_window, tree.parent);
                         current_window = tree.parent;
                     }
                     Err(e) => {
