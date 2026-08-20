@@ -22,6 +22,8 @@ use std::sync::Arc;
 /// 5. Initialise GTK4 application context.
 /// 6. Enter event loop. Process is parked by the kernel. CPU usage: 0.0%.
 pub fn run(config: &Config) {
+    setup_wayland_pdf_compatibility();
+
     let _rt = tokio::runtime::Runtime::new().unwrap();
     let _guard = _rt.enter();
 
@@ -165,4 +167,61 @@ fn handle_lookup(
     });
 }
 
+/// Create local .desktop overrides to force PDF viewers (Evince/Okular) to run
+/// under XWayland on Wayland sessions, so their text selections are visible to
+/// the X11 PRIMARY selection watcher.
+fn setup_wayland_pdf_compatibility() {
+    if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => {
+                log::debug!("Could not determine home directory. Skipping Wayland overrides.");
+                return;
+            }
+        };
 
+        let local_apps_dir = home.join(".local/share/applications");
+        if !local_apps_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(&local_apps_dir) {
+                log::warn!("Failed to create local applications directory: {}. Skipping Wayland overrides.", e);
+                return;
+            }
+        }
+
+        // 1. GNOME Evince — force X11 backend
+        let system_evince = std::path::PathBuf::from("/usr/share/applications/org.gnome.Evince.desktop");
+        let local_evince = local_apps_dir.join("org.gnome.Evince.desktop");
+        if system_evince.exists() {
+            log::info!("Wayland detected. Writing Evince desktop override for XWayland.");
+            if let Ok(content) = std::fs::read_to_string(&system_evince) {
+                let updated = content.replace("\nExec=evince", "\nExec=env GDK_BACKEND=x11 evince");
+                if let Err(e) = std::fs::write(&local_evince, updated) {
+                    log::warn!("Failed to write local Evince desktop override: {}", e);
+                }
+            }
+        }
+
+        // 2. KDE Okular — force xcb platform
+        let system_okular = std::path::PathBuf::from("/usr/share/applications/org.kde.okular.desktop");
+        let local_okular = local_apps_dir.join("org.kde.okular.desktop");
+        if system_okular.exists() {
+            log::info!("Wayland detected. Writing Okular desktop override for XWayland.");
+            if let Ok(content) = std::fs::read_to_string(&system_okular) {
+                let updated = content.replace("\nExec=okular", "\nExec=env QT_QPA_PLATFORM=xcb okular");
+                if let Err(e) = std::fs::write(&local_okular, updated) {
+                    log::warn!("Failed to write local Okular desktop override: {}", e);
+                }
+            }
+        }
+
+        // Update desktop database so the overrides are picked up immediately
+        if let Ok(status) = std::process::Command::new("update-desktop-database")
+            .arg(&local_apps_dir)
+            .status()
+        {
+            if !status.success() {
+                log::debug!("update-desktop-database exited with non-zero status.");
+            }
+        }
+    }
+}
