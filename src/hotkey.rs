@@ -1,7 +1,6 @@
 //! Registers global hotkeys via XGrabKey (x11rb).
 //! Emits trigger events to the daemon loop.
 
-
 /// Event emitted when a global hotkey is pressed.
 #[derive(Debug, Clone)]
 pub enum HotkeyEvent {
@@ -29,8 +28,8 @@ fn parse_hotkey_string(hotkey: &str) -> Result<ParsedHotkey, String> {
     for part in &parts[..parts.len() - 1] {
         match part.to_lowercase().as_str() {
             "ctrl" | "control" => modifiers |= u16::from(xproto::ModMask::CONTROL),
-            "alt" | "mod1"    => modifiers |= u16::from(xproto::ModMask::M1),
-            "shift"           => modifiers |= u16::from(xproto::ModMask::SHIFT),
+            "alt" | "mod1" => modifiers |= u16::from(xproto::ModMask::M1),
+            "shift" => modifiers |= u16::from(xproto::ModMask::SHIFT),
             "super" | "mod4" => modifiers |= u16::from(xproto::ModMask::M4),
             other => return Err(format!("Unknown modifier: {}", other)),
         }
@@ -149,28 +148,38 @@ impl HotkeyListener {
             min_keycode,
             lookup.keysym,
         )
-        .ok_or_else(|| format!("Cannot find keycode for lookup hotkey: {}", self.lookup_hotkey))?;
+        .ok_or_else(|| {
+            format!(
+                "Cannot find keycode for lookup hotkey: {}",
+                self.lookup_hotkey
+            )
+        })?;
 
         // Grab the keys on root window
         // Find modifier mask for Num_Lock (keysym 0xff7f)
         let num_lock_keysym = 0xff7f; // XK_Num_Lock
         let mut num_lock_mask: u16 = 0;
         let mut num_lock_keycode = 0;
-        
-        if let Some(code) = find_keycode(&keyboard_mapping.keysyms, keysyms_per_keycode, min_keycode, num_lock_keysym) {
+
+        if let Some(code) = find_keycode(
+            &keyboard_mapping.keysyms,
+            keysyms_per_keycode,
+            min_keycode,
+            num_lock_keysym,
+        ) {
             num_lock_keycode = code;
         }
 
         let modmap = conn.get_modifier_mapping()?.reply()?;
         let kpm = modmap.keycodes_per_modifier() as usize;
-        
+
         for (i, chunk) in modmap.keycodes.chunks(kpm).enumerate() {
             if num_lock_keycode != 0 && chunk.contains(&num_lock_keycode) {
                 num_lock_mask = 1 << i;
                 break;
             }
         }
-        
+
         let caps_lock_mask: u16 = 0x02; // LockMask
         let extra_modifiers: [u16; 4] = [
             0,
@@ -208,7 +217,10 @@ impl HotkeyListener {
                 if detail == lookup_keycode && clean_state == lookup.modifiers {
                     log::debug!("Lookup hotkey pressed");
                     if let Ok(pointer) = conn.query_pointer(root)?.reply() {
-                        let _ = self.sender.send(HotkeyEvent::Lookup(pointer.root_x as i32, pointer.root_y as i32));
+                        let _ = self.sender.send(HotkeyEvent::Lookup(
+                            pointer.root_x as i32,
+                            pointer.root_y as i32,
+                        ));
                     }
                 }
             }

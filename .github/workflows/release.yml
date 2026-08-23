@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Build & Package Release
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgtk-4-dev libdbus-1-dev
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install cargo-deb
+      run: cargo install cargo-deb
+
+    - name: Build release binary
+      run: cargo build --release
+
+    - name: Build Debian package
+      run: cargo deb --no-build
+
+    - name: Prepare assets
+      run: |
+        mkdir -p dist/
+        # Copy release binary
+        cp target/release/wd dist/wd
+        # Copy debian package (use wildcard to catch version/arch differences)
+        cp target/debian/*.deb dist/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          dist/wd
+          dist/*.deb
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

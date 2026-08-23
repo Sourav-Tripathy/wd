@@ -9,7 +9,6 @@ use crate::wordnet::WordNetIndex;
 
 use gtk4::glib;
 use gtk4::prelude::*;
-use libc;
 use std::sync::Arc;
 
 /// Run the wd daemon.
@@ -84,7 +83,14 @@ pub fn run(config: &Config) {
     let config_sel = config_arc.clone();
     glib::MainContext::default().spawn_local(async move {
         while let Some(event) = selection_rx.recv().await {
-            handle_lookup(&app_clone, event.text, wordnet_sel.clone(), config_sel.clone(), event.x, event.y);
+            handle_lookup(
+                &app_clone,
+                event.text,
+                wordnet_sel.clone(),
+                config_sel.clone(),
+                event.x,
+                event.y,
+            );
         }
     });
 
@@ -99,7 +105,14 @@ pub fn run(config: &Config) {
                     // Read current PRIMARY selection
                     match selection::read_primary_selection() {
                         Ok(text) if !text.is_empty() => {
-                            handle_lookup(&app_clone, text, wordnet_hk.clone(), config_hk.clone(), x, y);
+                            handle_lookup(
+                                &app_clone,
+                                text,
+                                wordnet_hk.clone(),
+                                config_hk.clone(),
+                                x,
+                                y,
+                            );
                         }
                         Ok(_) => log::debug!("Empty selection, ignoring lookup hotkey"),
                         Err(e) => log::warn!("Failed to read PRIMARY selection: {}", e),
@@ -138,14 +151,13 @@ fn handle_lookup(
     let app = app.clone();
     glib::MainContext::default().spawn_local(async move {
         log::info!("Looking up: {:?}", word);
-        
+
         let font_size = config.popup_font_size;
         let timeout = config.popup_timeout_ms;
-        
-        let result = tokio::task::spawn_blocking(move || {
-            lookup::lookup(&word, &wordnet, &config)
-        }).await;
-        
+
+        let result =
+            tokio::task::spawn_blocking(move || lookup::lookup(&word, &wordnet, &config)).await;
+
         match result {
             Ok(Ok(definitions)) => {
                 popup::show(&app, definitions, font_size, timeout, x, y);
@@ -189,7 +201,8 @@ fn setup_wayland_pdf_compatibility() {
         }
 
         // 1. GNOME Evince — force X11 backend
-        let system_evince = std::path::PathBuf::from("/usr/share/applications/org.gnome.Evince.desktop");
+        let system_evince =
+            std::path::PathBuf::from("/usr/share/applications/org.gnome.Evince.desktop");
         let local_evince = local_apps_dir.join("org.gnome.Evince.desktop");
         if system_evince.exists() {
             log::info!("Wayland detected. Writing Evince desktop override for XWayland.");
@@ -202,12 +215,14 @@ fn setup_wayland_pdf_compatibility() {
         }
 
         // 2. KDE Okular — force xcb platform
-        let system_okular = std::path::PathBuf::from("/usr/share/applications/org.kde.okular.desktop");
+        let system_okular =
+            std::path::PathBuf::from("/usr/share/applications/org.kde.okular.desktop");
         let local_okular = local_apps_dir.join("org.kde.okular.desktop");
         if system_okular.exists() {
             log::info!("Wayland detected. Writing Okular desktop override for XWayland.");
             if let Ok(content) = std::fs::read_to_string(&system_okular) {
-                let updated = content.replace("\nExec=okular", "\nExec=env QT_QPA_PLATFORM=xcb okular");
+                let updated =
+                    content.replace("\nExec=okular", "\nExec=env QT_QPA_PLATFORM=xcb okular");
                 if let Err(e) = std::fs::write(&local_okular, updated) {
                     log::warn!("Failed to write local Okular desktop override: {}", e);
                 }

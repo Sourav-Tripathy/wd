@@ -2,10 +2,10 @@
 //! Handles morphological variants (plurals, verb forms).
 
 use crate::types::{Definition, LookupError, LookupSource, PoS, Sense};
+use memmap2::Mmap;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::Path;
-use memmap2::Mmap;
 
 /// In-memory WordNet index built from the dict files.
 #[derive(Debug)]
@@ -179,7 +179,7 @@ impl WordNetIndex {
             // - sense_cnt field is at index `4 + ptr_cnt`.
             // - tagsense_cnt field is at index `4 + ptr_cnt + 1`.
             // - synset offsets start at index `4 + ptr_cnt + 2`.
-            let synset_start = 4 + ptr_cnt + 2; 
+            let synset_start = 4 + ptr_cnt + 2;
 
             // Collect synset offsets
             let mut synsets = Vec::new();
@@ -198,10 +198,7 @@ impl WordNetIndex {
                     pos_char,
                     synset_offsets: synsets,
                 };
-                self.entries
-                    .entry(lemma)
-                    .or_insert_with(Vec::new)
-                    .push(entry);
+                self.entries.entry(lemma).or_default().push(entry);
             }
         }
 
@@ -216,7 +213,10 @@ impl WordNetIndex {
         }
 
         let slice = &mmap[offset as usize..];
-        let newline_pos = slice.iter().position(|&b| b == b'\n').unwrap_or(slice.len());
+        let newline_pos = slice
+            .iter()
+            .position(|&b| b == b'\n')
+            .unwrap_or(slice.len());
         let line = std::str::from_utf8(&slice[..newline_pos]).ok()?;
 
         // Format: synset_offset lex_filenum ss_type w_cnt word lex_id ... | gloss
@@ -227,7 +227,10 @@ impl WordNetIndex {
         let gloss = parts[1].trim();
 
         let (definition, example) = Self::parse_gloss(gloss);
-        Some(Sense { definition, example })
+        Some(Sense {
+            definition,
+            example,
+        })
     }
 
     /// Parse a WordNet gloss into (definition, optional example).
@@ -269,7 +272,8 @@ impl WordNetIndex {
                         let base = parts[1].to_lowercase();
                         // If the base form exists in our index but the inflected doesn't,
                         // add the inflected form as an alias.
-                        if self.entries.contains_key(&base) && !self.entries.contains_key(&inflected)
+                        if self.entries.contains_key(&base)
+                            && !self.entries.contains_key(&inflected)
                         {
                             if let Some(entries) = self.entries.get(&base).cloned() {
                                 self.entries.insert(inflected, entries);
@@ -348,38 +352,34 @@ impl WordNetIndex {
         }
 
         // Common noun plural rules
-        if word.ends_with('s') {
+        if let Some(stripped) = word.strip_suffix('s') {
             // Remove trailing 's'
-            variants.push(word[..word.len() - 1].to_string());
+            variants.push(stripped.to_string());
 
             // 'es' -> ''
-            if word.ends_with("es") {
-                variants.push(word[..word.len() - 2].to_string());
+            if let Some(stripped_es) = word.strip_suffix("es") {
+                variants.push(stripped_es.to_string());
 
                 // 'ies' -> 'y'
-                if word.ends_with("ies") {
-                    let mut v = word[..word.len() - 3].to_string();
-                    v.push('y');
-                    variants.push(v);
+                if let Some(stripped_ies) = word.strip_suffix("ies") {
+                    variants.push(format!("{}y", stripped_ies));
                 }
 
                 // 'ves' -> 'f' / 'fe' (e.g. knives -> knife, leaves -> leaf)
-                if word.ends_with("ves") {
-                    let stem = &word[..word.len() - 3];
+                if let Some(stem) = word.strip_suffix("ves") {
                     variants.push(format!("{}f", stem));
                     variants.push(format!("{}fe", stem));
                 }
 
                 // 'ses', 'xes', 'zes' -> remove 'es'
                 if word.ends_with("ses") || word.ends_with("xes") || word.ends_with("zes") {
-                    variants.push(word[..word.len() - 2].to_string());
+                    variants.push(stripped_es.to_string());
                 }
             }
         }
 
         // Common verb forms
-        if word.ends_with("ing") {
-            let stem = &word[..word.len() - 3];
+        if let Some(stem) = word.strip_suffix("ing") {
             variants.push(stem.to_string());
             variants.push(format!("{}e", stem));
             if stem.len() >= 2 {
@@ -390,8 +390,7 @@ impl WordNetIndex {
             }
         }
 
-        if word.ends_with("ed") {
-            let stem = &word[..word.len() - 2];
+        if let Some(stem) = word.strip_suffix("ed") {
             variants.push(stem.to_string());
             variants.push(format!("{}e", stem));
             if stem.len() >= 2 {
@@ -402,37 +401,61 @@ impl WordNetIndex {
             }
         }
 
-        if word.ends_with("er") {
-            let stem = &word[..word.len() - 2];
+        if let Some(stem) = word.strip_suffix("er") {
             variants.push(stem.to_string());
             variants.push(format!("{}e", stem)); // e.g., larger -> large
-            
+
             // 'ier' -> 'y' (e.g. happier -> happy)
-            if word.ends_with("ier") {
-                let base = &word[..word.len() - 3];
+            if let Some(base) = word.strip_suffix("ier") {
                 variants.push(format!("{}y", base));
             }
         }
 
-        if word.ends_with("est") {
-            let stem = &word[..word.len() - 3];
+        if let Some(stem) = word.strip_suffix("est") {
             variants.push(stem.to_string());
             variants.push(format!("{}e", stem));
-            
+
             // 'iest' -> 'y'
-            if word.ends_with("iest") {
-                let base = &word[..word.len() - 4];
+            if let Some(base) = word.strip_suffix("iest") {
                 variants.push(format!("{}y", base));
             }
         }
 
-        if word.ends_with("ly") {
-            let stem = &word[..word.len() - 2];
+        if let Some(stem) = word.strip_suffix("ly") {
             variants.push(stem.to_string());
         }
 
         variants.sort();
         variants.dedup();
         variants
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_morphological_variants() {
+        let index = WordNetIndex::new();
+
+        // Test singular/plural noun rules
+        let cats_variants = index.morphological_variants("cats");
+        assert!(cats_variants.contains(&"cat".to_string()));
+
+        // Test irregular noun exceptions
+        let men_variants = index.morphological_variants("men");
+        assert!(men_variants.contains(&"man".to_string()));
+
+        // Test irregular verb exceptions
+        let went_variants = index.morphological_variants("went");
+        assert!(went_variants.contains(&"go".to_string()));
+
+        // Test common verb suffixes (ing, ed)
+        let running_variants = index.morphological_variants("running");
+        assert!(running_variants.contains(&"run".to_string()));
+
+        let loved_variants = index.morphological_variants("loved");
+        assert!(loved_variants.contains(&"love".to_string()));
     }
 }

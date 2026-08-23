@@ -4,7 +4,6 @@ use crate::config::Config;
 use crate::lookup;
 use crate::types::LookupError;
 use crate::wordnet::WordNetIndex;
-use std::process;
 
 /// Run a CLI word lookup. Prints formatted output and exits.
 pub fn run(word: &str, config: &Config) -> Result<(), ()> {
@@ -35,7 +34,7 @@ pub fn run(word: &str, config: &Config) -> Result<(), ()> {
     }
 }
 
-/// Format and print definitions to stdout 
+/// Format and print definitions to stdout
 ///
 /// Example output:
 /// ```text

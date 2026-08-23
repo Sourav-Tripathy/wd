@@ -3,8 +3,7 @@
 use crate::types::{Definition, LookupError, LookupSource, PoS, Sense};
 
 /// The Wiktionary REST API base URL.
-const WIKTIONARY_API_BASE: &str =
-    "https://en.wiktionary.org/api/rest_v1/page/definition";
+const WIKTIONARY_API_BASE: &str = "https://en.wiktionary.org/api/rest_v1/page/definition";
 
 /// Fetch a word definition from Wiktionary.
 /// This is the fallback when WordNet has no result.
@@ -20,9 +19,7 @@ pub fn fetch(word: &str) -> Result<Vec<Definition>, LookupError> {
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(404, _) => LookupError::NotFound(word.to_string()),
-            ureq::Error::Status(code, _) => {
-                LookupError::NetworkError(format!("HTTP {}", code))
-            }
+            ureq::Error::Status(code, _) => LookupError::NetworkError(format!("HTTP {}", code)),
             ureq::Error::Transport(t) => {
                 LookupError::NetworkError(format!("Transport error: {}", t))
             }
@@ -78,7 +75,7 @@ fn parse_wiktionary_response(
                 .and_then(|v| v.as_array())
                 .and_then(|arr| arr.first())
                 .and_then(|ex| ex.as_str())
-                .map(|s| strip_html_tags(s));
+                .map(strip_html_tags);
 
             senses.push(Sense {
                 definition,
@@ -130,14 +127,17 @@ fn strip_html_tags(input: &str) -> String {
                     "apos" => result.push('\''),
                     "nbsp" => result.push(' '),
                     _ => {
-                        let parsed = if entity_buf.starts_with("#x") || entity_buf.starts_with("#X") {
-                            u32::from_str_radix(&entity_buf[2..], 16).ok()
-                        } else if entity_buf.starts_with('#') {
-                            u32::from_str_radix(&entity_buf[1..], 10).ok()
+                        let parsed = if let Some(stripped) = entity_buf
+                            .strip_prefix("#x")
+                            .or_else(|| entity_buf.strip_prefix("#X"))
+                        {
+                            u32::from_str_radix(stripped, 16).ok()
+                        } else if let Some(stripped) = entity_buf.strip_prefix('#') {
+                            stripped.parse::<u32>().ok()
                         } else {
                             None
                         };
-                        
+
                         if let Some(code) = parsed.and_then(char::from_u32) {
                             result.push(code);
                         } else {
@@ -179,4 +179,25 @@ fn urlencoded(word: &str) -> String {
         }
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_urlencoded() {
+        assert_eq!(urlencoded("think"), "think");
+        assert_eq!(urlencoded("hello world"), "hello%20world");
+        assert_eq!(urlencoded("test/word"), "test%2Fword");
+    }
+
+    #[test]
+    fn test_strip_html_tags() {
+        assert_eq!(strip_html_tags("plain text"), "plain text");
+        assert_eq!(strip_html_tags("hello <b>world</b>"), "hello world");
+        assert_eq!(strip_html_tags("A &amp; B"), "A & B");
+        assert_eq!(strip_html_tags("&#x26;"), "&");
+        assert_eq!(strip_html_tags("&#38;"), "&");
+    }
 }

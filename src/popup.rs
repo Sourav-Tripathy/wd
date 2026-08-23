@@ -9,7 +9,7 @@ use gtk4::{
 };
 
 thread_local! {
-    static ACTIVE_WINDOW: std::cell::RefCell<Option<ApplicationWindow>> = std::cell::RefCell::new(None);
+    static ACTIVE_WINDOW: std::cell::RefCell<Option<ApplicationWindow>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Show a popup window near the cursor with the given definitions.
@@ -195,12 +195,9 @@ pub fn show(
     // Auto-dismiss timeout
     if timeout_ms > 0 {
         let window_clone = window.clone();
-        glib::timeout_add_local_once(
-            std::time::Duration::from_millis(timeout_ms),
-            move || {
-                window_clone.close();
-            },
-        );
+        glib::timeout_add_local_once(std::time::Duration::from_millis(timeout_ms), move || {
+            window_clone.close();
+        });
     }
 
     window.set_opacity(0.0);
@@ -211,8 +208,8 @@ pub fn show(
     glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
         // Move natively
         move_window_to_cursor_x11(x, y);
-        
-        // Wait another 40ms for the compositor to actually render the new coordinates 
+
+        // Wait another 40ms for the compositor to actually render the new coordinates
         // before we make the window visible, guaranteeing zero blips.
         glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
             window_for_opacity.set_opacity(1.0);
@@ -230,9 +227,24 @@ fn move_window_to_cursor_x11(cx: i32, cy: i32) {
         let root = conn.setup().roots[screen_num].root;
 
         let mut target_window = None;
-        let wm_name = conn.intern_atom(false, b"WM_NAME").unwrap().reply().unwrap().atom;
-        let net_wm_name = conn.intern_atom(false, b"_NET_WM_NAME").unwrap().reply().unwrap().atom;
-        let wm_class = conn.intern_atom(false, b"WM_CLASS").unwrap().reply().unwrap().atom;
+        let wm_name = conn
+            .intern_atom(false, b"WM_NAME")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+        let net_wm_name = conn
+            .intern_atom(false, b"_NET_WM_NAME")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
+        let wm_class = conn
+            .intern_atom(false, b"WM_CLASS")
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom;
 
         // Simple BFS to find the most recent window with title or class containing "wd"
         let mut queue = vec![root];
@@ -276,7 +288,7 @@ fn move_window_to_cursor_x11(cx: i32, cy: i32) {
                     }
                 }
             }
-            
+
             if let Ok(c_tree) = conn.query_tree(w) {
                 if let Ok(tree) = c_tree.reply() {
                     queue.extend(tree.children);
@@ -316,12 +328,7 @@ fn move_window_to_cursor_x11(cx: i32, cy: i32) {
             }
 
             log::info!("Moving window {} to: ({}, {})", w, target_x, target_y);
-            let _ = conn.configure_window(
-                w,
-                &ConfigureWindowAux::new()
-                    .x(target_x)
-                    .y(target_y),
-            );
+            let _ = conn.configure_window(w, &ConfigureWindowAux::new().x(target_x).y(target_y));
             let _ = conn.flush();
         } else {
             log::warn!("Could not find the 'wd' window on the X11 display tree.");

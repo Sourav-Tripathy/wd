@@ -1,7 +1,6 @@
 //! X11 PRIMARY selection watcher via x11rb.
 //! Emits word events when selection changes in a PDF viewer.
 
-
 /// Known PDF viewer window class names.
 pub const PDF_VIEWER_CLASSES: &[&str] = &[
     "evince",
@@ -14,12 +13,7 @@ pub const PDF_VIEWER_CLASSES: &[&str] = &[
 
 /// Known PDF viewer process names for _NET_WM_PID fallback.
 pub const PDF_VIEWER_PROCESSES: &[&str] = &[
-    "evince",
-    "okular",
-    "epdfview",
-    "mupdf",
-    "zathura",
-    "qpdfview",
+    "evince", "okular", "epdfview", "mupdf", "zathura", "qpdfview",
 ];
 
 /// Event emitted when a word is selected in a PDF viewer.
@@ -41,7 +35,10 @@ pub struct SelectionWatcher {
 
 impl SelectionWatcher {
     /// Create a new selection watcher.
-    pub fn new(sender: tokio::sync::mpsc::UnboundedSender<SelectionEvent>, pdf_auto_trigger: bool) -> Self {
+    pub fn new(
+        sender: tokio::sync::mpsc::UnboundedSender<SelectionEvent>,
+        pdf_auto_trigger: bool,
+    ) -> Self {
         SelectionWatcher {
             sender,
             pdf_auto_trigger,
@@ -72,9 +69,7 @@ impl SelectionWatcher {
         let _ = xfixes_info; // version confirmed
 
         // Get extension info for event-base arithmetic
-        let ext_info = conn
-            .query_extension(b"XFIXES")?
-            .reply()?;
+        let ext_info = conn.query_extension(b"XFIXES")?.reply()?;
         // XFixes SelectionNotify is event_base + 0
         let xfixes_selection_notify_type = ext_info.first_event;
 
@@ -111,14 +106,8 @@ impl SelectionWatcher {
         log::info!("Selection watcher started, monitoring PRIMARY selection");
 
         // UTF8_STRING atom for selection conversion
-        let utf8_string = conn
-            .intern_atom(false, b"UTF8_STRING")?
-            .reply()?
-            .atom;
-        let wd_sel = conn
-            .intern_atom(false, b"WD_SELECTION")?
-            .reply()?
-            .atom;
+        let utf8_string = conn.intern_atom(false, b"UTF8_STRING")?.reply()?.atom;
+        let wd_sel = conn.intern_atom(false, b"WD_SELECTION")?.reply()?.atom;
 
         // Event loop
         loop {
@@ -139,23 +128,28 @@ impl SelectionWatcher {
 
                 log::debug!("Selection owner window: {}", selection_owner);
 
-                // Wayland proxy clipboard windows might not have WM_CLASS or PID. 
+                // Wayland proxy clipboard windows might not have WM_CLASS or PID.
                 // Thus, we also check the active window!
-                let active_window_atom = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW")?.reply()?.atom;
-                let active_window = match conn.get_property(false, root, active_window_atom, xproto::AtomEnum::ANY, 0, 1)?.reply() {
+                let active_window_atom = conn
+                    .intern_atom(false, b"_NET_ACTIVE_WINDOW")?
+                    .reply()?
+                    .atom;
+                let active_window = match conn
+                    .get_property(false, root, active_window_atom, xproto::AtomEnum::ANY, 0, 1)?
+                    .reply()
+                {
                     Ok(prop) => prop.value32().and_then(|mut iter| iter.next()).unwrap_or(0),
                     Err(_) => 0,
                 };
 
-                let mut is_pdf = false;
-                if selection_owner != 0 && self.is_pdf_viewer_window(&conn, selection_owner) {
-                    is_pdf = true;
-                } else if active_window != 0 && self.is_pdf_viewer_window(&conn, active_window) {
-                    is_pdf = true;
-                }
+                let is_pdf = (selection_owner != 0
+                    && self.is_pdf_viewer_window(&conn, selection_owner))
+                    || (active_window != 0 && self.is_pdf_viewer_window(&conn, active_window));
 
                 if !is_pdf {
-                    log::debug!("Neither selection owner nor active window is a PDF viewer, skipping");
+                    log::debug!(
+                        "Neither selection owner nor active window is a PDF viewer, skipping"
+                    );
                     continue;
                 }
 
@@ -174,14 +168,7 @@ impl SelectionWatcher {
             if event_type == xproto::SELECTION_NOTIFY_EVENT {
                 // Read the property
                 let prop = conn
-                    .get_property(
-                        true,
-                        event_window,
-                        wd_sel,
-                        utf8_string,
-                        0,
-                        1024 * 1024,
-                    )?
+                    .get_property(true, event_window, wd_sel, utf8_string, 0, 1024 * 1024)?
                     .reply()?;
 
                 if let Ok(text) = String::from_utf8(prop.value) {
@@ -190,13 +177,16 @@ impl SelectionWatcher {
                         // Only trigger for single words or short phrases
                         log::debug!("PDF selection detected: {:?}", text);
                         let pointer = conn.query_pointer(root)?.reply()?;
-                        let _ = self.sender.send(SelectionEvent { 
-                            text, 
-                            x: pointer.root_x as i32, 
-                            y: pointer.root_y as i32 
+                        let _ = self.sender.send(SelectionEvent {
+                            text,
+                            x: pointer.root_x as i32,
+                            y: pointer.root_y as i32,
                         });
                     } else if !text.is_empty() {
-                        log::debug!("Selection too long, ignoring: {:?}", &text[..text.len().min(50)]);
+                        log::debug!(
+                            "Selection too long, ignoring: {:?}",
+                            &text[..text.len().min(50)]
+                        );
                     }
                 }
             }
@@ -219,13 +209,13 @@ impl SelectionWatcher {
         };
 
         let mut current_window = window;
-        
+
         // Traverse up the window tree
         for depth in 0..10 {
             if current_window == 0 {
                 break;
             }
-            
+
             let prop = match conn.get_property(
                 false,
                 current_window,
@@ -256,7 +246,11 @@ impl SelectionWatcher {
                         continue;
                     }
                     let seg_str = String::from_utf8_lossy(seg).to_lowercase();
-                    log::debug!("WM_CLASS segment found on win {}: {:?}", current_window, seg_str);
+                    log::debug!(
+                        "WM_CLASS segment found on win {}: {:?}",
+                        current_window,
+                        seg_str
+                    );
                     for class_name in PDF_VIEWER_CLASSES {
                         if seg_str.contains(&class_name.to_lowercase()) {
                             log::debug!("PDF viewer detected: {:?}", seg_str);
@@ -271,11 +265,18 @@ impl SelectionWatcher {
             match conn.query_tree(current_window) {
                 Ok(cookie) => match cookie.reply() {
                     Ok(tree) => {
-                        if tree.parent == current_window || tree.parent == 0 || tree.parent == tree.root {
+                        if tree.parent == current_window
+                            || tree.parent == 0
+                            || tree.parent == tree.root
+                        {
                             log::debug!("Reached root/null at depth {}. Treating as Wayland proxy window, proceeding to fallback.", depth);
                             break;
                         }
-                        log::debug!("WM_CLASS empty/mismatched on win {}, trying parent: {}", current_window, tree.parent);
+                        log::debug!(
+                            "WM_CLASS empty/mismatched on win {}, trying parent: {}",
+                            current_window,
+                            tree.parent
+                        );
                         current_window = tree.parent;
                     }
                     Err(e) => {
@@ -302,7 +303,7 @@ impl SelectionWatcher {
         };
 
         let mut current_window = window; // Restart from original selection owner window
-        
+
         for depth in 0..10 {
             if current_window == 0 {
                 break;
@@ -319,7 +320,11 @@ impl SelectionWatcher {
                 Ok(cookie) => match cookie.reply() {
                     Ok(prop) => prop,
                     Err(e) => {
-                        log::debug!("_NET_WM_PID get_property reply error at depth {}: {:?}", depth, e);
+                        log::debug!(
+                            "_NET_WM_PID get_property reply error at depth {}: {:?}",
+                            depth,
+                            e
+                        );
                         break;
                     }
                 },
@@ -338,7 +343,10 @@ impl SelectionWatcher {
                         log::debug!("Process name for PID {}: {}", pid, comm);
                         for process_name in PDF_VIEWER_PROCESSES {
                             if comm == *process_name {
-                                log::debug!("PDF viewer process detected via _NET_WM_PID: {:?}", comm);
+                                log::debug!(
+                                    "PDF viewer process detected via _NET_WM_PID: {:?}",
+                                    comm
+                                );
                                 return true;
                             }
                         }
@@ -353,11 +361,21 @@ impl SelectionWatcher {
             match conn.query_tree(current_window) {
                 Ok(cookie) => match cookie.reply() {
                     Ok(tree) => {
-                        if tree.parent == current_window || tree.parent == 0 || tree.parent == tree.root {
-                            log::debug!("Reached root/null at depth {} trying to find _NET_WM_PID.", depth);
+                        if tree.parent == current_window
+                            || tree.parent == 0
+                            || tree.parent == tree.root
+                        {
+                            log::debug!(
+                                "Reached root/null at depth {} trying to find _NET_WM_PID.",
+                                depth
+                            );
                             break;
                         }
-                        log::debug!("_NET_WM_PID empty/mismatched on win {}, trying parent: {}", current_window, tree.parent);
+                        log::debug!(
+                            "_NET_WM_PID empty/mismatched on win {}, trying parent: {}",
+                            current_window,
+                            tree.parent
+                        );
                         current_window = tree.parent;
                     }
                     Err(e) => {
@@ -439,8 +457,8 @@ pub fn read_primary_selection() -> Result<String, Box<dyn std::error::Error>> {
     conn.destroy_window(window)?;
     conn.flush()?;
 
-    let text = String::from_utf8(prop.value)
-        .map_err(|e| format!("Invalid UTF-8 in selection: {}", e))?;
+    let text =
+        String::from_utf8(prop.value).map_err(|e| format!("Invalid UTF-8 in selection: {}", e))?;
 
     Ok(text.trim().to_string())
 }

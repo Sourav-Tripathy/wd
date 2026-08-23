@@ -2,6 +2,12 @@
 
 A lightweight word-lookup daemon and CLI tool for Linux.
 
+## Project History
+
+This project started purely for personal convenience. As someone who reads a lot of digital books and PDFs on my laptop, I wanted a tool that would automatically display definitions for highlighted words *without* needing to press manual keyboard shortcuts or interrupt my reading flow.
+
+As a beginner to Rust, I built this tool side-by-side with AI assistants. Because this is a learning journey and a hobby project, simplicity is a core value here. I hope others find it useful, and I will try to address every issue or feature request that comes along!
+
 ## Features
 
 - **CLI mode** — Type `wd <word>` and get a clean, formatted definition instantly
@@ -120,17 +126,13 @@ max_definitions = 3
 
 ## Contributing
 
-Contributions are incredibly welcome! I am specifically looking for help migrating `wd` to natively support the modern Wayland desktop ecosystem.
+Contributions are incredibly welcome! If you enjoy system-level Rust programming, feel free to dive in and open a PR. Since this is a learning project, please write precise reasons in your PR or code comments explaining your changes.
 
-**Note:** The CLI and the Global Hotkey (`Ctrl+Alt+W`) currently work flawlessly across all desktop environments!
-
-**Open Issues you can help solve (See `problems_to_fix.md` for resolved glitches):**
+**Open Issues you can help solve:**
 - **Native Wayland Selection Watcher:** Implement a Wayland-native text selection monitor (e.g., using the `wlr-data-control` protocol) to replace the current `XFixes` dependency. 
 - **Wayland Global Hotkeys:** Support Wayland global shortcuts (e.g., via the `xdg-desktop-portal` `GlobalShortcuts` interface) instead of X11-specific global keyboard grabs.
 - **GTK4 Notification Placement:** Find a clean, native approach to placing GTK4 popup windows precisely at the cursor coordinates within a strict Wayland environment (perhaps via the GTK Layer Shell).
 - **PDF Annotation Support:** Introduce PDF annotations via a robust backend like `libpoppler` to embed dictionary metadata directly into the underlying `.pdf` files, systematically bypassing the unsupported D-Bus viewer APIs we previously relied on.
-
-If you enjoy system-level Rust programming, feel free to dive in and open a PR!
 
 ## License
 
