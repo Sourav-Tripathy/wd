@@ -27,6 +27,8 @@ jobs:
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: "v1-ubuntu-22.04"
 
     - name: Install cargo-deb
       run: cargo install cargo-deb
