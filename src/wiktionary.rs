@@ -14,7 +14,11 @@ pub fn fetch(word: &str) -> Result<Vec<Definition>, LookupError> {
         .set("Accept", "application/json")
         .set(
             "User-Agent",
-            "wd/0.1.0 (Linux word lookup tool; mailto:contact@example.com)",
+            concat!(
+                "wd/",
+                env!("CARGO_PKG_VERSION"),
+                " (Linux word lookup tool; mailto:lipuntripathy74@gmail.com)"
+            ),
         )
         .call()
         .map_err(|e| match e {

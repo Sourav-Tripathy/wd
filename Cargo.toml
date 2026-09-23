@@ -2,7 +2,7 @@
 name = "wd"
 version = "0.1.0"
 edition = "2021"
-authors = ["Sourav Tripathy"]
+authors = ["Sourav Tripathy <lipuntripathy74@gmail.com>"]
 description = "A lightweight word-lookup daemon and CLI tool for Linux"
 license = "MIT"
 readme = "README.md"
@@ -56,7 +56,7 @@ libc = "0.2"
 
 [package.metadata.deb]
 name = "wd"
-maintainer = "Sourav Tripathy"
+maintainer = "Sourav Tripathy <lipuntripathy74@gmail.com>"
 copyright = "2026, Sourav Tripathy"
 depends = "libgtk-4-1, libdbus-1-3, libglib2.0-0, wordnet-base | wd-wordnet-data"
 section = "utils"

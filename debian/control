@@ -1,7 +1,7 @@
 Source: wd
 Section: utils
 Priority: optional
-Maintainer: Sourav Tripathy
+Maintainer: Sourav Tripathy <lipuntripathy74@gmail.com>
 Build-Depends: debhelper (>= 12), cargo, rustc
 Standards-Version: 4.5.0
 

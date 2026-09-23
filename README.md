@@ -40,7 +40,7 @@ systemctl --user enable --now wd.service
 ### From .deb package
 
 ```bash
-sudo apt install ./wd_0.1.0_amd64.deb
+sudo apt install ./wd_*.deb
 ```
 
 ### WordNet data
