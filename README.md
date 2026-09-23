@@ -17,6 +17,14 @@ As a beginner to Rust, I built this tool side-by-side with AI assistants. Becaus
 - **Offline-first** — Uses a local WordNet database via instant memory mappings (`mmap`) with automatic Wiktionary fallback
 - **Lightweight** — Under 4 MB RAM at idle, zero CPU between lookups
 
+## Preview
+
+### PDF Auto-Lookup & Popup
+![PDF Popup Demo](assets/pdf_demo.png)
+
+### CLI Mode
+![CLI Demo](assets/cli_demo.png)
+
 ## Install
 
 ### From source
