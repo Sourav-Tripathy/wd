@@ -63,8 +63,8 @@ section = "utils"
 priority = "optional"
 assets = [
     ["target/release/wd", "usr/bin/", "755"],
-    ["debian/wd.service", "usr/lib/systemd/user/", "644"],
     ["debian/wd.desktop", "etc/xdg/autostart/", "644"],
+    ["debian/wd.desktop", "usr/share/applications/", "644"],
     ["README.md", "usr/share/doc/wd/", "644"],
 ]
 maintainer-scripts = "debian/"

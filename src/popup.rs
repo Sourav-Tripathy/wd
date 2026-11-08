@@ -1,6 +1,7 @@
 //! GTK4 popup window. Receives Definition, renders near cursor,
 //! handles dismiss and annotation hotkey.
 
+use crate::config::Config;
 use crate::types::Definition;
 use gtk4::prelude::*;
 use gtk4::{
@@ -10,17 +11,141 @@ use gtk4::{
 
 thread_local! {
     static ACTIVE_WINDOW: std::cell::RefCell<Option<ApplicationWindow>> = const { std::cell::RefCell::new(None) };
+    static CSS_PROVIDER: std::cell::RefCell<Option<CssProvider>> = const { std::cell::RefCell::new(None) };
+}
+
+fn parse_hex_color(color: &str) -> Option<(u8, u8, u8)> {
+    let c = color.trim().strip_prefix('#').unwrap_or(color.trim());
+    if c.len() == 6 {
+        let r = u8::from_str_radix(&c[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&c[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&c[4..6], 16).ok()?;
+        Some((r, g, b))
+    } else if c.len() == 3 {
+        let r = u8::from_str_radix(&c[0..1], 16).ok()?;
+        let g = u8::from_str_radix(&c[1..2], 16).ok()?;
+        let b = u8::from_str_radix(&c[2..3], 16).ok()?;
+        Some((r * 17, g * 17, b * 17))
+    } else {
+        match color.to_lowercase().as_str() {
+            "white" => Some((255, 255, 255)),
+            "black" => Some((0, 0, 0)),
+            _ => None,
+        }
+    }
+}
+
+fn relative_luminance(r: u8, g: u8, b: u8) -> f64 {
+    fn srgb_to_linear(v: u8) -> f64 {
+        let val = (v as f64) / 255.0;
+        if val <= 0.04045 {
+            val / 12.92
+        } else {
+            ((val + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * srgb_to_linear(r) + 0.7152 * srgb_to_linear(g) + 0.0722 * srgb_to_linear(b)
+}
+
+fn contrast_ratio(l1: f64, l2: f64) -> f64 {
+    let (bright, dark) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (bright + 0.05) / (dark + 0.05)
+}
+
+/// Ensures the text color has adequate contrast against the background color.
+/// If contrast is insufficient (< 3.0:1), automatically selects a high-contrast text color.
+pub fn ensure_contrast(text_color: &str, bg_color: &str) -> String {
+    if let (Some((tr, tg, tb)), Some((br, bg, bb))) =
+        (parse_hex_color(text_color), parse_hex_color(bg_color))
+    {
+        let text_lum = relative_luminance(tr, tg, tb);
+        let bg_lum = relative_luminance(br, bg, bb);
+        let ratio = contrast_ratio(text_lum, bg_lum);
+        if ratio < 3.0 {
+            if bg_lum > 0.4 {
+                "#1f2328".to_string()
+            } else {
+                "#f0f6fc".to_string()
+            }
+        } else {
+            text_color.to_string()
+        }
+    } else {
+        text_color.to_string()
+    }
+}
+
+fn generate_css(config: &Config) -> String {
+    let font_size = config.popup_font_size;
+    let bg_color = &config.popup_bg_color;
+    let text_color = ensure_contrast(&config.popup_text_color, bg_color);
+    let header_color = ensure_contrast(&config.popup_header_color, bg_color);
+    let accent_color = &config.popup_accent_color;
+    let border_color = &config.popup_border_color;
+    let example_color = &config.popup_example_color;
+
+    format!(
+        r#"
+        window {{
+            background-color: {bg_color};
+            border-radius: 12px;
+            border: 1px solid {border_color};
+        }}
+        .popup-container {{
+            padding: 16px;
+        }}
+        .word-header {{
+            color: {header_color};
+            font-size: {h_size}pt;
+            font-weight: bold;
+        }}
+        .pos-label {{
+            color: {example_color};
+            font-size: {font_size}pt;
+            font-style: italic;
+        }}
+        .definition-text {{
+            color: {text_color};
+            font-size: {font_size}pt;
+        }}
+        .example-text {{
+            color: {example_color};
+            font-size: {ex_size}pt;
+            font-style: italic;
+        }}
+        .source-label {{
+            color: {example_color};
+            font-size: {src_size}pt;
+        }}
+        .sense-number {{
+            color: {accent_color};
+            font-size: {font_size}pt;
+            font-weight: bold;
+        }}
+        "#,
+        bg_color = bg_color,
+        border_color = border_color,
+        header_color = header_color,
+        h_size = font_size + 2,
+        example_color = example_color,
+        text_color = text_color,
+        font_size = font_size,
+        ex_size = font_size.saturating_sub(1),
+        src_size = font_size.saturating_sub(2),
+        accent_color = accent_color,
+    )
 }
 
 /// Show a popup window near the cursor with the given definitions.
 pub fn show(
     app: &Application,
     definitions: Vec<Definition>,
-    font_size: u32,
-    timeout_ms: u64,
+    config: &Config,
     x: i32,
     y: i32,
 ) {
+    let timeout_ms = config.popup_timeout_ms;
+
     // Close the previous window if any to prevent task list accumulation
     ACTIVE_WINDOW.with(|active| {
         if let Some(old_window) = active.borrow_mut().take() {
@@ -55,62 +180,22 @@ pub fn show(
         });
     });
 
-    static CSS_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !CSS_LOADED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        let css = CssProvider::new();
-        css.load_from_data(&format!(
-            r#"
-            window {{
-                background-color: #1e1e2e;
-                border-radius: 12px;
-                border: 1px solid #45475a;
-            }}
-            .popup-container {{
-                padding: 16px;
-            }}
-            .word-header {{
-                color: #cdd6f4;
-                font-size: {}pt;
-                font-weight: bold;
-            }}
-            .pos-label {{
-                color: #a6adc8;
-                font-size: {}pt;
-                font-style: italic;
-            }}
-            .definition-text {{
-                color: #bac2de;
-                font-size: {}pt;
-            }}
-            .example-text {{
-                color: #6c7086;
-                font-size: {}pt;
-                font-style: italic;
-            }}
-            .source-label {{
-                color: #585b70;
-                font-size: {}pt;
-            }}
-            .sense-number {{
-                color: #89b4fa;
-                font-size: {}pt;
-                font-weight: bold;
-            }}
-            "#,
-            font_size + 2,
-            font_size,
-            font_size,
-            font_size.saturating_sub(1),
-            font_size.saturating_sub(2),
-            font_size,
-        ));
-
-        gtk4::style_context_add_provider_for_display(
-            &gdk::Display::default().expect("Could not get default display"),
-            &css,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
+    // Load or update CSS provider with current config colors
+    CSS_PROVIDER.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        let provider = opt.get_or_insert_with(|| {
+            let p = CssProvider::new();
+            if let Some(display) = gdk::Display::default() {
+                gtk4::style_context_add_provider_for_display(
+                    &display,
+                    &p,
+                    gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+            }
+            p
+        });
+        provider.load_from_data(&generate_css(config));
+    });
 
     // Build content
     let container = GtkBox::new(Orientation::Vertical, 8);
@@ -333,5 +418,45 @@ fn move_window_to_cursor_x11(cx: i32, cy: i32) {
         } else {
             log::warn!("Could not find the 'wd' window on the X11 display tree.");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ensure_contrast_preserves_good_contrast() {
+        // Light text on dark background
+        let text = ensure_contrast("#ffffff", "#1e1e2e");
+        assert_eq!(text, "#ffffff");
+
+        // Dark text on light background
+        let text = ensure_contrast("#000000", "#ffffff");
+        assert_eq!(text, "#000000");
+    }
+
+    #[test]
+    fn test_ensure_contrast_fixes_poor_contrast() {
+        // Light text on white background -> adapt to dark
+        let text = ensure_contrast("#ffffff", "#ffffff");
+        assert_eq!(text, "#1f2328");
+
+        // Dark text on dark background -> adapt to light
+        let text = ensure_contrast("#111111", "#1e1e2e");
+        assert_eq!(text, "#f0f6fc");
+    }
+
+    #[test]
+    fn test_generate_css_includes_custom_colors() {
+        let mut config = Config::default();
+        config.popup_bg_color = "#282828".to_string();
+        config.popup_text_color = "#ebdbb2".to_string();
+        config.popup_border_color = "#504945".to_string();
+
+        let css = generate_css(&config);
+        assert!(css.contains("background-color: #282828;"));
+        assert!(css.contains("color: #ebdbb2;"));
+        assert!(css.contains("border: 1px solid #504945;"));
     }
 }

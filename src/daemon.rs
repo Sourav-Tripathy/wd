@@ -152,15 +152,13 @@ fn handle_lookup(
     glib::MainContext::default().spawn_local(async move {
         log::info!("Looking up: {:?}", word);
 
-        let font_size = config.popup_font_size;
-        let timeout = config.popup_timeout_ms;
-
+        let config_lookup = config.clone();
         let result =
-            tokio::task::spawn_blocking(move || lookup::lookup(&word, &wordnet, &config)).await;
+            tokio::task::spawn_blocking(move || lookup::lookup(&word, &wordnet, &config_lookup)).await;
 
         match result {
             Ok(Ok(definitions)) => {
-                popup::show(&app, definitions, font_size, timeout, x, y);
+                popup::show(&app, definitions, &config, x, y);
             }
             Ok(Err(e)) => {
                 log::debug!("Lookup failed: {}", e);
@@ -179,7 +177,70 @@ fn handle_lookup(
     });
 }
 
-/// Create local .desktop overrides to force PDF viewers (Evince/Okular) to run
+/// Helper to patch an Exec line in a .desktop file to prefix it with an environment variable.
+fn patch_exec_command(content: &str, target_cmd: &str, env_prefix: &str) -> Option<String> {
+    if content.contains(env_prefix) {
+        return None;
+    }
+
+    let mut modified = false;
+    let mut lines = Vec::new();
+
+    for line in content.lines() {
+        if line.starts_with("Exec=") {
+            let exec_val = &line[5..];
+            let trimmed = exec_val.trim_start();
+            let matches_binary = trimmed == target_cmd
+                || trimmed.starts_with(&format!("{} ", target_cmd))
+                || trimmed == format!("/usr/bin/{}", target_cmd)
+                || trimmed.starts_with(&format!("/usr/bin/{} ", target_cmd));
+
+            if matches_binary {
+                lines.push(format!("Exec=env {} {}", env_prefix, trimmed));
+                modified = true;
+                continue;
+            }
+        }
+        lines.push(line.to_string());
+    }
+
+    if modified {
+        let mut result = lines.join("\n");
+        if content.ends_with('\n') {
+            result.push('\n');
+        }
+        Some(result)
+    } else {
+        None
+    }
+}
+
+fn apply_desktop_override(
+    system_desktop: &std::path::Path,
+    local_desktop: &std::path::Path,
+    target_cmd: &str,
+    env_prefix: &str,
+    viewer_name: &str,
+) {
+    let source_path = if local_desktop.exists() {
+        local_desktop
+    } else if system_desktop.exists() {
+        system_desktop
+    } else {
+        return;
+    };
+
+    if let Ok(content) = std::fs::read_to_string(source_path) {
+        if let Some(updated) = patch_exec_command(&content, target_cmd, env_prefix) {
+            log::info!("Wayland detected. Writing {} desktop override for XWayland.", viewer_name);
+            if let Err(e) = std::fs::write(local_desktop, updated) {
+                log::warn!("Failed to write local {} desktop override: {}", viewer_name, e);
+            }
+        }
+    }
+}
+
+/// Create local .desktop overrides to force PDF viewers (Papers/Evince/Okular) to run
 /// under XWayland on Wayland sessions, so their text selections are visible to
 /// the X11 PRIMARY selection watcher.
 fn setup_wayland_pdf_compatibility() {
@@ -200,34 +261,28 @@ fn setup_wayland_pdf_compatibility() {
             }
         }
 
-        // 1. GNOME Evince — force X11 backend
+        // 1. GNOME Papers (default in Ubuntu 24.10+ / 26.04+) — force X11 backend
+        let system_papers = [
+            std::path::PathBuf::from("/usr/share/applications/org.gnome.Papers.desktop"),
+            std::path::PathBuf::from("/usr/share/applications/papers.desktop"),
+        ];
+        for sys_path in &system_papers {
+            let filename = sys_path.file_name().unwrap();
+            let local_path = local_apps_dir.join(filename);
+            apply_desktop_override(sys_path, &local_path, "papers", "GDK_BACKEND=x11", "Papers");
+        }
+
+        // 2. GNOME Evince (Ubuntu 22.04 / 24.04) — force X11 backend
         let system_evince =
             std::path::PathBuf::from("/usr/share/applications/org.gnome.Evince.desktop");
         let local_evince = local_apps_dir.join("org.gnome.Evince.desktop");
-        if system_evince.exists() {
-            log::info!("Wayland detected. Writing Evince desktop override for XWayland.");
-            if let Ok(content) = std::fs::read_to_string(&system_evince) {
-                let updated = content.replace("\nExec=evince", "\nExec=env GDK_BACKEND=x11 evince");
-                if let Err(e) = std::fs::write(&local_evince, updated) {
-                    log::warn!("Failed to write local Evince desktop override: {}", e);
-                }
-            }
-        }
+        apply_desktop_override(&system_evince, &local_evince, "evince", "GDK_BACKEND=x11", "Evince");
 
-        // 2. KDE Okular — force xcb platform
+        // 3. KDE Okular — force xcb platform
         let system_okular =
             std::path::PathBuf::from("/usr/share/applications/org.kde.okular.desktop");
         let local_okular = local_apps_dir.join("org.kde.okular.desktop");
-        if system_okular.exists() {
-            log::info!("Wayland detected. Writing Okular desktop override for XWayland.");
-            if let Ok(content) = std::fs::read_to_string(&system_okular) {
-                let updated =
-                    content.replace("\nExec=okular", "\nExec=env QT_QPA_PLATFORM=xcb okular");
-                if let Err(e) = std::fs::write(&local_okular, updated) {
-                    log::warn!("Failed to write local Okular desktop override: {}", e);
-                }
-            }
-        }
+        apply_desktop_override(&system_okular, &local_okular, "okular", "QT_QPA_PLATFORM=xcb", "Okular");
 
         // Update desktop database so the overrides are picked up immediately
         if let Ok(status) = std::process::Command::new("update-desktop-database")
@@ -238,5 +293,42 @@ fn setup_wayland_pdf_compatibility() {
                 log::debug!("update-desktop-database exited with non-zero status.");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_patch_exec_command_papers() {
+        let input = "[Desktop Entry]\nName=Papers\nExec=papers %U\nType=Application\n";
+        let patched = patch_exec_command(input, "papers", "GDK_BACKEND=x11").unwrap();
+        assert_eq!(
+            patched,
+            "[Desktop Entry]\nName=Papers\nExec=env GDK_BACKEND=x11 papers %U\nType=Application\n"
+        );
+    }
+
+    #[test]
+    fn test_patch_exec_command_usr_bin() {
+        let input = "[Desktop Entry]\nName=Papers\nExec=/usr/bin/papers %U\nType=Application\n";
+        let patched = patch_exec_command(input, "papers", "GDK_BACKEND=x11").unwrap();
+        assert_eq!(
+            patched,
+            "[Desktop Entry]\nName=Papers\nExec=env GDK_BACKEND=x11 /usr/bin/papers %U\nType=Application\n"
+        );
+    }
+
+    #[test]
+    fn test_patch_exec_command_already_patched() {
+        let input = "[Desktop Entry]\nName=Papers\nExec=env GDK_BACKEND=x11 papers %U\nType=Application\n";
+        assert!(patch_exec_command(input, "papers", "GDK_BACKEND=x11").is_none());
+    }
+
+    #[test]
+    fn test_patch_exec_command_unmatched() {
+        let input = "[Desktop Entry]\nName=Text Editor\nExec=gedit %U\nType=Application\n";
+        assert!(patch_exec_command(input, "papers", "GDK_BACKEND=x11").is_none());
     }
 }

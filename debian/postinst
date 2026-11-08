@@ -45,12 +45,18 @@ else
     fi
 fi
 
-# Enable systemd user service if user session is active
+# Clean up any legacy systemd user service from previous versions
 if [ -n "$DBUS_SESSION_BUS_ADDRESS" ] && command -v systemctl > /dev/null 2>&1; then
-    systemctl --user enable --now wd.service 2>/dev/null || true
-    echo "wd: Daemon enabled via systemd user service"
-else
-    echo "wd: Note - run 'systemctl --user enable --now wd.service' after login to start the daemon"
+    systemctl --user disable --now wd.service 2>/dev/null || true
+    systemctl --user daemon-reload 2>/dev/null || true
 fi
+
+# Update desktop database so autostart and application registries are refreshed immediately
+if command -v update-desktop-database > /dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications 2>/dev/null || true
+fi
+
+echo "wd: Desktop autostart configured (/etc/xdg/autostart/wd.desktop)"
+echo "wd: The daemon will start automatically upon desktop login."
 
 exit 0

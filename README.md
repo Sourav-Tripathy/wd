@@ -12,7 +12,7 @@ As a beginner to Rust, I built this tool side-by-side with AI assistants. Becaus
 
 - **CLI mode** — Type `wd <word>` and get a clean, formatted definition instantly
 - **Daemon mode** — Runs silently in the background:
-  - Auto-detects text selection in PDF viewers (Evince/Okular) and shows a popup
+  - Auto-detects text selection in PDF viewers (Papers/Evince/Okular) and shows a popup
   - Global hotkey (`Ctrl+Alt+W`) to look up the current text selection from any app
 - **Offline-first** — Uses a local WordNet database via instant memory mappings (`mmap`) with automatic Wiktionary fallback
 - **Lightweight** — Under 4 MB RAM at idle, zero CPU between lookups
@@ -39,10 +39,12 @@ cargo build --release
 # Install binary
 sudo cp target/release/wd /usr/bin/wd
 
-# Install systemd service
-mkdir -p ~/.config/systemd/user
-cp debian/wd.service ~/.config/systemd/user/
-systemctl --user enable --now wd.service
+# Configure desktop autostart (starts automatically upon desktop login)
+mkdir -p ~/.config/autostart
+cp debian/wd.desktop ~/.config/autostart/
+
+# Or run the daemon immediately in the background
+wd --daemon &
 ```
 
 ### From .deb package
@@ -90,11 +92,11 @@ wd think
 ### Daemon
 
 ```bash
-# Start the daemon (usually handled by systemd)
-wd --daemon
+# Start the daemon in background
+wd --daemon &
 
-# Or enable the systemd service
-systemctl --user enable --now wd.service
+# When installed via package or autostart desktop entry,
+# the daemon starts automatically every time you log in to your desktop.
 ```
 
 ## Hotkeys
@@ -106,15 +108,26 @@ systemctl --user enable --now wd.service
 
 ## Configuration
 
-Edit `~/.config/wd/config.toml` (created with defaults on first run):
+Edit `~/.config/wd/config.toml` (created with helpful defaults on first run):
 
 ```toml
+# General settings
 lookup_hotkey = "Ctrl+Alt+W"
-pdf_auto_trigger = false
+pdf_auto_trigger = true
 popup_timeout_ms = 0
 popup_font_size = 13
 max_definitions = 3
+
+# Popup appearance & colors (HEX or CSS names)
+popup_bg_color = "#1e1e2e"       # Window background
+popup_text_color = "#bac2de"     # Definition description text
+popup_header_color = "#cdd6f4"   # Word header title
+popup_accent_color = "#89b4fa"   # Numbering (1., 2., 3.)
+popup_border_color = "#45475a"   # Outline border
+popup_example_color = "#6c7086"  # Example sentences & grammar label
 ```
+
+> **Contrast Guarantee:** If you choose a light background (e.g. `popup_bg_color = "#ffffff"`), `wd` automatically verifies and enforces high-contrast readability for the text even if you leave the default text color.
 
 ## Lookup Resolution
 
@@ -128,7 +141,7 @@ max_definitions = 3
 `wd` currently relies on X11 APIs (via `x11rb`) for global hotkeys, window identification, and popup placement. Because of this, using it under **Wayland** introduces several characteristics:
 
 1. **Wayland Global Hotkeys**: On strict Wayland compositors (like GNOME), global hotkeys (`Ctrl+Alt+W`) will only fire if an X11/XWayland window is currently in focus. Less restrictive compositors (like KDE Plasma) usually allow global X11 shortcuts out-of-the-box.
-2. **Wayland PDF Viewer Compatibility**: To auto-trigger lookups on highlighted text under Wayland, PDF viewers (like Evince or Okular) must run under XWayland. The daemon automatically handles this on startup by creating user-local launcher overrides under `~/.local/share/applications/` to force these PDF viewers to use the X11 backend (`GDK_BACKEND=x11` for Evince, `QT_QPA_PLATFORM=xcb` for Okular).
+2. **Wayland PDF Viewer Compatibility**: To auto-trigger lookups on highlighted text under Wayland, PDF viewers (like Papers, Evince, or Okular) must run under XWayland. The daemon automatically handles this on startup by creating user-local launcher overrides under `~/.local/share/applications/` to force these PDF viewers to use the X11 backend (`GDK_BACKEND=x11` for Papers/Evince, `QT_QPA_PLATFORM=xcb` for Okular).
 3. **Cursor Snapping**: The definition popup snaps centered directly above the cursor/selection, clamping within screen boundaries. If the selection is at the very top of the screen, the popup automatically shifts below the cursor. **For cursor snapping to work cleanly, the daemon must run with `GDK_BACKEND=x11`.**
 4. **Linux Only**: Coupled to D-Bus, X11, and Linux filesystem structures.
 

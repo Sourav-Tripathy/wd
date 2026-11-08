@@ -7,13 +7,20 @@ pub const PDF_VIEWER_CLASSES: &[&str] = &[
     "Evince",
     "okular",
     "Okular",
+    "papers",
+    "Papers",
     "org.gnome.Evince",
+    "org.gnome.Papers",
     "org.kde.okular",
+    "atril",
+    "Atril",
+    "xreader",
+    "Xreader",
 ];
 
 /// Known PDF viewer process names for _NET_WM_PID fallback.
 pub const PDF_VIEWER_PROCESSES: &[&str] = &[
-    "evince", "okular", "epdfview", "mupdf", "zathura", "qpdfview",
+    "evince", "okular", "epdfview", "mupdf", "zathura", "qpdfview", "papers", "atril", "xreader",
 ];
 
 /// Event emitted when a word is selected in a PDF viewer.
@@ -461,4 +468,25 @@ pub fn read_primary_selection() -> Result<String, Box<dyn std::error::Error>> {
         String::from_utf8(prop.value).map_err(|e| format!("Invalid UTF-8 in selection: {}", e))?;
 
     Ok(text.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pdf_viewer_classes_include_papers() {
+        assert!(PDF_VIEWER_CLASSES.contains(&"papers"));
+        assert!(PDF_VIEWER_CLASSES.contains(&"Papers"));
+        assert!(PDF_VIEWER_CLASSES.contains(&"org.gnome.Papers"));
+        assert!(PDF_VIEWER_CLASSES.contains(&"evince"));
+        assert!(PDF_VIEWER_CLASSES.contains(&"okular"));
+    }
+
+    #[test]
+    fn test_pdf_viewer_processes_include_papers() {
+        assert!(PDF_VIEWER_PROCESSES.contains(&"papers"));
+        assert!(PDF_VIEWER_PROCESSES.contains(&"evince"));
+        assert!(PDF_VIEWER_PROCESSES.contains(&"okular"));
+    }
 }
