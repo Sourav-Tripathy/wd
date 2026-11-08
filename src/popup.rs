@@ -137,13 +137,7 @@ fn generate_css(config: &Config) -> String {
 }
 
 /// Show a popup window near the cursor with the given definitions.
-pub fn show(
-    app: &Application,
-    definitions: Vec<Definition>,
-    config: &Config,
-    x: i32,
-    y: i32,
-) {
+pub fn show(app: &Application, definitions: Vec<Definition>, config: &Config, x: i32, y: i32) {
     let timeout_ms = config.popup_timeout_ms;
 
     // Close the previous window if any to prevent task list accumulation
@@ -449,10 +443,12 @@ mod tests {
 
     #[test]
     fn test_generate_css_includes_custom_colors() {
-        let mut config = Config::default();
-        config.popup_bg_color = "#282828".to_string();
-        config.popup_text_color = "#ebdbb2".to_string();
-        config.popup_border_color = "#504945".to_string();
+        let config = Config {
+            popup_bg_color: "#282828".to_string(),
+            popup_text_color: "#ebdbb2".to_string(),
+            popup_border_color: "#504945".to_string(),
+            ..Default::default()
+        };
 
         let css = generate_css(&config);
         assert!(css.contains("background-color: #282828;"));

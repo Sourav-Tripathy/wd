@@ -154,7 +154,8 @@ fn handle_lookup(
 
         let config_lookup = config.clone();
         let result =
-            tokio::task::spawn_blocking(move || lookup::lookup(&word, &wordnet, &config_lookup)).await;
+            tokio::task::spawn_blocking(move || lookup::lookup(&word, &wordnet, &config_lookup))
+                .await;
 
         match result {
             Ok(Ok(definitions)) => {
@@ -187,8 +188,7 @@ fn patch_exec_command(content: &str, target_cmd: &str, env_prefix: &str) -> Opti
     let mut lines = Vec::new();
 
     for line in content.lines() {
-        if line.starts_with("Exec=") {
-            let exec_val = &line[5..];
+        if let Some(exec_val) = line.strip_prefix("Exec=") {
             let trimmed = exec_val.trim_start();
             let matches_binary = trimmed == target_cmd
                 || trimmed.starts_with(&format!("{} ", target_cmd))
@@ -232,9 +232,16 @@ fn apply_desktop_override(
 
     if let Ok(content) = std::fs::read_to_string(source_path) {
         if let Some(updated) = patch_exec_command(&content, target_cmd, env_prefix) {
-            log::info!("Wayland detected. Writing {} desktop override for XWayland.", viewer_name);
+            log::info!(
+                "Wayland detected. Writing {} desktop override for XWayland.",
+                viewer_name
+            );
             if let Err(e) = std::fs::write(local_desktop, updated) {
-                log::warn!("Failed to write local {} desktop override: {}", viewer_name, e);
+                log::warn!(
+                    "Failed to write local {} desktop override: {}",
+                    viewer_name,
+                    e
+                );
             }
         }
     }
@@ -276,13 +283,25 @@ fn setup_wayland_pdf_compatibility() {
         let system_evince =
             std::path::PathBuf::from("/usr/share/applications/org.gnome.Evince.desktop");
         let local_evince = local_apps_dir.join("org.gnome.Evince.desktop");
-        apply_desktop_override(&system_evince, &local_evince, "evince", "GDK_BACKEND=x11", "Evince");
+        apply_desktop_override(
+            &system_evince,
+            &local_evince,
+            "evince",
+            "GDK_BACKEND=x11",
+            "Evince",
+        );
 
         // 3. KDE Okular — force xcb platform
         let system_okular =
             std::path::PathBuf::from("/usr/share/applications/org.kde.okular.desktop");
         let local_okular = local_apps_dir.join("org.kde.okular.desktop");
-        apply_desktop_override(&system_okular, &local_okular, "okular", "QT_QPA_PLATFORM=xcb", "Okular");
+        apply_desktop_override(
+            &system_okular,
+            &local_okular,
+            "okular",
+            "QT_QPA_PLATFORM=xcb",
+            "Okular",
+        );
 
         // Update desktop database so the overrides are picked up immediately
         if let Ok(status) = std::process::Command::new("update-desktop-database")
@@ -322,7 +341,8 @@ mod tests {
 
     #[test]
     fn test_patch_exec_command_already_patched() {
-        let input = "[Desktop Entry]\nName=Papers\nExec=env GDK_BACKEND=x11 papers %U\nType=Application\n";
+        let input =
+            "[Desktop Entry]\nName=Papers\nExec=env GDK_BACKEND=x11 papers %U\nType=Application\n";
         assert!(patch_exec_command(input, "papers", "GDK_BACKEND=x11").is_none());
     }
 
