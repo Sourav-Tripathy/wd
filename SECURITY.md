@@ -6,7 +6,8 @@ Currently, security updates and bug fixes are applied only to the latest version
 
 | Version | Supported          |
 | ------- | ------------------ |
-| >= 0.1.x | :white_check_mark: |
+| >= 0.2.x | :white_check_mark: |
+| 0.1.x   | :white_check_mark: |
 | < 0.1.0  | :x:                |
 
 ## Reporting a Vulnerability
