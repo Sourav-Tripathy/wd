@@ -118,16 +118,19 @@ popup_timeout_ms = 0
 popup_font_size = 13
 max_definitions = 3
 
-# Popup appearance & colors (HEX or CSS names)
-popup_bg_color = "#1e1e2e"       # Window background
-popup_text_color = "#bac2de"     # Definition description text
-popup_header_color = "#cdd6f4"   # Word header title
-popup_accent_color = "#89b4fa"   # Numbering (1., 2., 3.)
-popup_border_color = "#45475a"   # Outline border
-popup_example_color = "#6c7086"  # Example sentences & grammar label
+# Theme presets: "dark" (default), "light", "sepia", "nord"
+theme = "dark"
+
+# Optional: Override individual colors with HEX or CSS color names
+# popup_bg_color = "#1e1e2e"       # Window background
+# popup_text_color = "#bac2de"     # Definition description text
+# popup_header_color = "#cdd6f4"   # Word header title
+# popup_accent_color = "#89b4fa"   # Numbering (1., 2., 3.)
+# popup_border_color = "#45475a"   # Outline border
+# popup_example_color = "#6c7086"  # Example sentences & grammar label
 ```
 
-> **Contrast Guarantee:** If you choose a light background (e.g. `popup_bg_color = "#ffffff"`), `wd` automatically verifies and enforces high-contrast readability for the text even if you leave the default text color.
+> **Contrast Guarantee:** If you choose a light or sepia background, `wd` automatically verifies and enforces high-contrast readability for the text even if you leave the default text color.
 
 ## Lookup Resolution
 

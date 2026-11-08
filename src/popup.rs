@@ -77,12 +77,12 @@ pub fn ensure_contrast(text_color: &str, bg_color: &str) -> String {
 
 fn generate_css(config: &Config) -> String {
     let font_size = config.popup_font_size;
-    let bg_color = &config.popup_bg_color;
-    let text_color = ensure_contrast(&config.popup_text_color, bg_color);
-    let header_color = ensure_contrast(&config.popup_header_color, bg_color);
-    let accent_color = &config.popup_accent_color;
-    let border_color = &config.popup_border_color;
-    let example_color = &config.popup_example_color;
+    let bg_color = config.bg_color();
+    let text_color = ensure_contrast(config.text_color(), bg_color);
+    let header_color = ensure_contrast(config.header_color(), bg_color);
+    let accent_color = config.accent_color();
+    let border_color = config.border_color();
+    let example_color = config.example_color();
 
     format!(
         r#"
@@ -444,9 +444,9 @@ mod tests {
     #[test]
     fn test_generate_css_includes_custom_colors() {
         let config = Config {
-            popup_bg_color: "#282828".to_string(),
-            popup_text_color: "#ebdbb2".to_string(),
-            popup_border_color: "#504945".to_string(),
+            popup_bg_color: Some("#282828".to_string()),
+            popup_text_color: Some("#ebdbb2".to_string()),
+            popup_border_color: Some("#504945".to_string()),
             ..Default::default()
         };
 
@@ -454,5 +454,17 @@ mod tests {
         assert!(css.contains("background-color: #282828;"));
         assert!(css.contains("color: #ebdbb2;"));
         assert!(css.contains("border: 1px solid #504945;"));
+    }
+
+    #[test]
+    fn test_generate_css_sepia_preset() {
+        let config = Config {
+            theme: "sepia".to_string(),
+            ..Default::default()
+        };
+
+        let css = generate_css(&config);
+        assert!(css.contains("background-color: #fbf0d9;"));
+        assert!(css.contains("color: #433422;"));
     }
 }

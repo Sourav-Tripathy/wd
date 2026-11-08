@@ -4,6 +4,53 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// Palette colors for predefined theme presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThemePalette {
+    pub bg: &'static str,
+    pub text: &'static str,
+    pub header: &'static str,
+    pub accent: &'static str,
+    pub border: &'static str,
+    pub example: &'static str,
+}
+
+pub const PALETTE_DARK: ThemePalette = ThemePalette {
+    bg: "#1e1e2e",
+    text: "#bac2de",
+    header: "#cdd6f4",
+    accent: "#89b4fa",
+    border: "#45475a",
+    example: "#6c7086",
+};
+
+pub const PALETTE_LIGHT: ThemePalette = ThemePalette {
+    bg: "#f8f9fa",
+    text: "#24292f",
+    header: "#0969da",
+    accent: "#1f883d",
+    border: "#d0d7de",
+    example: "#57606a",
+};
+
+pub const PALETTE_SEPIA: ThemePalette = ThemePalette {
+    bg: "#fbf0d9",
+    text: "#433422",
+    header: "#5f4325",
+    accent: "#8c5a2b",
+    border: "#e0d4b8",
+    example: "#7a6855",
+};
+
+pub const PALETTE_NORD: ThemePalette = ThemePalette {
+    bg: "#2e3440",
+    text: "#d8dee9",
+    header: "#88c0d0",
+    accent: "#81a1c1",
+    border: "#4c566a",
+    example: "#e5e9f0",
+};
+
 /// Application configuration, matching all keys in the architecture spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -27,29 +74,33 @@ pub struct Config {
     #[serde(default = "default_max_definitions")]
     pub max_definitions: usize,
 
-    /// Background color of the definition popup window.
-    #[serde(default = "default_popup_bg_color")]
-    pub popup_bg_color: String,
+    /// Predefined theme preset ("dark", "light", "sepia", "nord").
+    #[serde(default = "default_theme")]
+    pub theme: String,
 
-    /// Main definition text color.
-    #[serde(default = "default_popup_text_color")]
-    pub popup_text_color: String,
+    /// Optional custom background color override.
+    #[serde(default)]
+    pub popup_bg_color: Option<String>,
 
-    /// Looked up word title / header color.
-    #[serde(default = "default_popup_header_color")]
-    pub popup_header_color: String,
+    /// Optional custom text color override.
+    #[serde(default)]
+    pub popup_text_color: Option<String>,
 
-    /// Accent color for numbering (1., 2., 3.).
-    #[serde(default = "default_popup_accent_color")]
-    pub popup_accent_color: String,
+    /// Optional custom header color override.
+    #[serde(default)]
+    pub popup_header_color: Option<String>,
 
-    /// Outline border color of the popup window.
-    #[serde(default = "default_popup_border_color")]
-    pub popup_border_color: String,
+    /// Optional custom accent color override.
+    #[serde(default)]
+    pub popup_accent_color: Option<String>,
 
-    /// Example sentences and grammar label text color.
-    #[serde(default = "default_popup_example_color")]
-    pub popup_example_color: String,
+    /// Optional custom border color override.
+    #[serde(default)]
+    pub popup_border_color: Option<String>,
+
+    /// Optional custom example sentences/grammar label color override.
+    #[serde(default)]
+    pub popup_example_color: Option<String>,
 }
 
 fn default_lookup_hotkey() -> String {
@@ -68,28 +119,8 @@ fn default_max_definitions() -> usize {
     3
 }
 
-fn default_popup_bg_color() -> String {
-    "#1e1e2e".to_string()
-}
-
-fn default_popup_text_color() -> String {
-    "#bac2de".to_string()
-}
-
-fn default_popup_header_color() -> String {
-    "#cdd6f4".to_string()
-}
-
-fn default_popup_accent_color() -> String {
-    "#89b4fa".to_string()
-}
-
-fn default_popup_border_color() -> String {
-    "#45475a".to_string()
-}
-
-fn default_popup_example_color() -> String {
-    "#6c7086".to_string()
+fn default_theme() -> String {
+    "dark".to_string()
 }
 
 impl Default for Config {
@@ -100,12 +131,13 @@ impl Default for Config {
             popup_timeout_ms: 0,
             popup_font_size: default_popup_font_size(),
             max_definitions: default_max_definitions(),
-            popup_bg_color: default_popup_bg_color(),
-            popup_text_color: default_popup_text_color(),
-            popup_header_color: default_popup_header_color(),
-            popup_accent_color: default_popup_accent_color(),
-            popup_border_color: default_popup_border_color(),
-            popup_example_color: default_popup_example_color(),
+            theme: default_theme(),
+            popup_bg_color: None,
+            popup_text_color: None,
+            popup_header_color: None,
+            popup_accent_color: None,
+            popup_border_color: None,
+            popup_example_color: None,
         }
     }
 }
@@ -172,6 +204,56 @@ impl Config {
         Config::default()
     }
 
+    /// Returns the resolved theme palette based on the `theme` field.
+    pub fn palette(&self) -> ThemePalette {
+        match self.theme.trim().to_lowercase().as_str() {
+            "light" => PALETTE_LIGHT,
+            "sepia" => PALETTE_SEPIA,
+            "nord" => PALETTE_NORD,
+            _ => PALETTE_DARK,
+        }
+    }
+
+    /// Background color (uses custom override if set, else theme preset).
+    pub fn bg_color(&self) -> &str {
+        self.popup_bg_color.as_deref().unwrap_or(self.palette().bg)
+    }
+
+    /// Definition description text color (uses custom override if set, else theme preset).
+    pub fn text_color(&self) -> &str {
+        self.popup_text_color
+            .as_deref()
+            .unwrap_or(self.palette().text)
+    }
+
+    /// Word header title color (uses custom override if set, else theme preset).
+    pub fn header_color(&self) -> &str {
+        self.popup_header_color
+            .as_deref()
+            .unwrap_or(self.palette().header)
+    }
+
+    /// Sense numbering color (uses custom override if set, else theme preset).
+    pub fn accent_color(&self) -> &str {
+        self.popup_accent_color
+            .as_deref()
+            .unwrap_or(self.palette().accent)
+    }
+
+    /// Window outline border color (uses custom override if set, else theme preset).
+    pub fn border_color(&self) -> &str {
+        self.popup_border_color
+            .as_deref()
+            .unwrap_or(self.palette().border)
+    }
+
+    /// Example sentences & grammar label color (uses custom override if set, else theme preset).
+    pub fn example_color(&self) -> &str {
+        self.popup_example_color
+            .as_deref()
+            .unwrap_or(self.palette().example)
+    }
+
     /// Default TOML configuration with rich comments explaining all available variables and colors.
     pub fn default_toml_content() -> &'static str {
         r##"# wd configuration file
@@ -198,55 +280,23 @@ popup_font_size = 13
 max_definitions = 3
 
 # ---------------------------------------------------------------------------
-# POPUP COLOR SETTINGS
+# POPUP THEME SETTINGS
 # ---------------------------------------------------------------------------
-# Customize the appearance of the popup window.
-# Supports standard HEX codes (e.g. "#1e1e2e") or standard CSS color names.
-#
-# Available Color Variables:
-#   popup_bg_color      - Popup window background color (default: "#1e1e2e")
-#   popup_text_color    - Main definition description text (default: "#bac2de")
-#   popup_header_color  - Looked up word title header (default: "#cdd6f4")
-#   popup_accent_color  - Sense numbering indicators (1., 2., 3.) (default: "#89b4fa")
-#   popup_border_color  - Popup window outer border line (default: "#45475a")
-#   popup_example_color - Example sentences & grammar part-of-speech (default: "#6c7086")
-#
-# NOTE: The daemon automatically verifies contrast. If you select a light background
-# without changing text colors, it will automatically ensure high-contrast readability.
+# Choose from built-in theme presets:
+#   "dark"  - Deep slate/navy background with soft light text (default)
+#   "light" - Clean off-white background with charcoal text for daytime reading
+#   "sepia" - Warm parchment tone with espresso text for e-book readers
+#   "nord"  - Arctic blue-grey palette
+theme = "dark"
 
-popup_bg_color = "#1e1e2e"
-popup_text_color = "#bac2de"
-popup_header_color = "#cdd6f4"
-popup_accent_color = "#89b4fa"
-popup_border_color = "#45475a"
-popup_example_color = "#6c7086"
-
-# ---------------------------------------------------------------------------
-# POPULAR THEME PRESETS (Copy and paste any block above):
-# ---------------------------------------------------------------------------
-# Clean Light Theme:
-#   popup_bg_color = "#ffffff"
-#   popup_text_color = "#24292f"
-#   popup_header_color = "#0969da"
-#   popup_accent_color = "#1f883d"
-#   popup_border_color = "#d0d7de"
-#   popup_example_color = "#57606a"
-#
-# Gruvbox Dark:
-#   popup_bg_color = "#282828"
-#   popup_text_color = "#ebdbb2"
-#   popup_header_color = "#fabd2f"
-#   popup_accent_color = "#fe8019"
-#   popup_border_color = "#504945"
-#   popup_example_color = "#928374"
-#
-# Tokyo Night:
-#   popup_bg_color = "#1a1b26"
-#   popup_text_color = "#a9b1d6"
-#   popup_header_color = "#7aa2f7"
-#   popup_accent_color = "#bb9af7"
-#   popup_border_color = "#414868"
-#   popup_example_color = "#565f89"
+# Optional: Override individual colors (leave commented out to use preset colors)
+# Supports standard HEX codes (e.g. "#1e1e2e") or CSS color names.
+# popup_bg_color = "#1e1e2e"
+# popup_text_color = "#bac2de"
+# popup_header_color = "#cdd6f4"
+# popup_accent_color = "#89b4fa"
+# popup_border_color = "#45475a"
+# popup_example_color = "#6c7086"
 "##
     }
 
@@ -264,12 +314,13 @@ popup_example_color = "#6c7086"
             && self.popup_timeout_ms == 0
             && self.popup_font_size == default_popup_font_size()
             && self.max_definitions == default_max_definitions()
-            && self.popup_bg_color == default_popup_bg_color()
-            && self.popup_text_color == default_popup_text_color()
-            && self.popup_header_color == default_popup_header_color()
-            && self.popup_accent_color == default_popup_accent_color()
-            && self.popup_border_color == default_popup_border_color()
-            && self.popup_example_color == default_popup_example_color();
+            && self.theme == default_theme()
+            && self.popup_bg_color.is_none()
+            && self.popup_text_color.is_none()
+            && self.popup_header_color.is_none()
+            && self.popup_accent_color.is_none()
+            && self.popup_border_color.is_none()
+            && self.popup_example_color.is_none();
 
         let contents = if is_default {
             Self::default_toml_content().to_string()
@@ -288,36 +339,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config_has_colors() {
+    fn test_default_config_has_dark_palette() {
         let config = Config::default();
-        assert_eq!(config.popup_bg_color, "#1e1e2e");
-        assert_eq!(config.popup_text_color, "#bac2de");
-        assert_eq!(config.popup_header_color, "#cdd6f4");
-        assert_eq!(config.popup_accent_color, "#89b4fa");
-        assert_eq!(config.popup_border_color, "#45475a");
-        assert_eq!(config.popup_example_color, "#6c7086");
+        assert_eq!(config.theme, "dark");
+        assert_eq!(config.bg_color(), "#1e1e2e");
+        assert_eq!(config.text_color(), "#bac2de");
+        assert_eq!(config.header_color(), "#cdd6f4");
+        assert_eq!(config.accent_color(), "#89b4fa");
+        assert_eq!(config.border_color(), "#45475a");
+        assert_eq!(config.example_color(), "#6c7086");
     }
 
     #[test]
-    fn test_deserialize_custom_colors() {
+    fn test_sepia_theme_preset() {
+        let toml_str = r#"theme = "sepia""#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.theme, "sepia");
+        assert_eq!(config.bg_color(), "#fbf0d9");
+        assert_eq!(config.text_color(), "#433422");
+        assert_eq!(config.header_color(), "#5f4325");
+        assert_eq!(config.accent_color(), "#8c5a2b");
+    }
+
+    #[test]
+    fn test_nord_theme_preset() {
+        let toml_str = r#"theme = "nord""#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.theme, "nord");
+        assert_eq!(config.bg_color(), "#2e3440");
+        assert_eq!(config.text_color(), "#d8dee9");
+        assert_eq!(config.header_color(), "#88c0d0");
+    }
+
+    #[test]
+    fn test_light_theme_preset() {
+        let toml_str = r#"theme = "light""#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.theme, "light");
+        assert_eq!(config.bg_color(), "#f8f9fa");
+        assert_eq!(config.text_color(), "#24292f");
+    }
+
+    #[test]
+    fn test_custom_color_override_over_theme() {
         let toml_str = r##"
-            lookup_hotkey = "Ctrl+Alt+D"
+            theme = "sepia"
             popup_bg_color = "#ffffff"
-            popup_text_color = "#000000"
         "##;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.lookup_hotkey, "Ctrl+Alt+D");
-        assert_eq!(config.popup_bg_color, "#ffffff");
-        assert_eq!(config.popup_text_color, "#000000");
-        // Defaults preserved for omitted fields
-        assert_eq!(config.popup_header_color, "#cdd6f4");
+        assert_eq!(config.bg_color(), "#ffffff"); // Custom override wins
+        assert_eq!(config.text_color(), "#433422"); // Sepia preset retained for rest
     }
 
     #[test]
     fn test_default_toml_content_parses() {
         let content = Config::default_toml_content();
         let config: Config = toml::from_str(content).unwrap();
-        assert_eq!(config.popup_bg_color, "#1e1e2e");
-        assert_eq!(config.popup_text_color, "#bac2de");
+        assert_eq!(config.theme, "dark");
+        assert_eq!(config.bg_color(), "#1e1e2e");
     }
 }
